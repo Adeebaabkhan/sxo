@@ -1146,7 +1146,7 @@
 
         <button class="nav-item" data-view="products" id="navBtnProducts">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"/><path d="M12 22V12"/><polyline points="3.29 7 12 12 20.71 7"/><path d="m7.5 4.27 9 5.15"/></svg>
-          <span>Product List</span>
+          <span>Subscription Products</span>
         </button>
 
         <button class="nav-item" data-view="salary-rules">
@@ -1399,35 +1399,16 @@
         <section id="view-products" class="page-view">
           <div class="page-header">
             <div>
-              <h1 class="page-title">Product List</h1>
-              <p class="page-subtitle">Catalog pricing, margins, and commissions</p>
+              <h1 class="page-title">Subscription Products</h1>
+              <p class="page-subtitle">Manage subscription plans, profile pricing, and slot capacity</p>
             </div>
             <div class="header-controls" id="ownerProductActions">
-              <button class="btn btn-outline" onclick="openAddSubscriptionModal()">+ Add Subscription</button>
-              <button class="btn btn-primary" onclick="openAddProductModal()">+ Add Product</button>
+              <button class="btn btn-outline" onclick="openManageAppsModal()">⚙️ Manage Apps</button>
+              <button class="btn btn-primary" onclick="openAddSubscriptionModal()">+ Add Subscription Product</button>
             </div>
           </div>
 
-          <div class="sub-tabs">
-            <button class="sub-tab active" id="tabRegularProducts" onclick="switchProductTab('regular')">Regular Products</button>
-            <button class="sub-tab" id="tabSubProducts" onclick="switchProductTab('subscription')">Subscription Products</button>
-          </div>
-
-          <div id="regularProductsPane">
-            <div class="filter-bar">
-              <div class="search-wrap">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-                <input type="text" id="productSearch" class="input-control" placeholder="Search products..." oninput="renderProductList()">
-              </div>
-              <select id="productSortSelect" class="select-control" onchange="sortProducts(this.value)">
-                <option value="name">Sort by Name</option>
-                <option value="price">Sort by Price</option>
-              </select>
-            </div>
-            <div id="productList" class="cards-grid"></div>
-          </div>
-
-          <div id="subscriptionProductsPane" style="display:none;">
+          <div id="subscriptionProductsPane">
             <div id="subscriptionProductList" class="cards-grid"></div>
           </div>
         </section>
@@ -1681,14 +1662,13 @@
           </div>
         </div>
 
-        <!-- Owner-Only Sale Overrides (Cost, Custom Commission, Date, Assigned User) -->
+        <!-- Owner-Only Sale Overrides (Custom Commission, Date, Assigned User) -->
         <div id="ownerSaleOverrides" style="display:none; border:1px solid var(--border); background:var(--muted); border-radius:10px; padding:12px;" class="form-grid">
           <div style="font-size:11px; font-weight:600; color:var(--primary); text-transform:uppercase; letter-spacing:0.05em;">Owner Controls & Commission Override</div>
-          <div class="form-grid two-col">
-            <div class="form-field">
-              <label>Unit Cost / Capital</label>
-              <input type="number" id="saleBuyPriceInput" class="input-control" step="0.01" min="0" placeholder="Auto from product">
-            </div>
+          <div class="form-field">
+            <label>Unit Commission (leave blank = auto-calculate)</label>
+            <input type="number" id="saleCustomCommissionInput" class="input-control" step="0.01" min="0" placeholder="Auto-calculated">
+          </div>
             <div class="form-field">
               <label>Unit Commission (leave blank = auto)</label>
               <input type="number" id="saleCustomCommissionInput" class="input-control" step="0.01" min="0" placeholder="Auto-calculated">
@@ -1835,7 +1815,6 @@
               <th>Warranty</th>
               <th>Buyer</th>
               <th>Email</th>
-              <th>Cost</th>
               <th>Sell</th>
               <th>Qty</th>
               <th>Status</th>
@@ -1960,31 +1939,29 @@
       </div>
       <form id="addSubscriptionForm" class="form-grid">
         <div class="form-field">
-          <label>Subscription Name</label>
-          <input type="text" id="subProductName" class="input-control" placeholder="e.g. Netflix Premium 4K" required>
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <label style="margin:0;">App / Service</label>
+            <button type="button" class="btn btn-sm btn-outline" onclick="openManageAppsModal()" style="font-size:11px; padding:2px 8px;">⚙️ Manage Apps</button>
+          </div>
+          <input type="text" id="subProductName" class="input-control" placeholder="Select or type app (e.g. Netflix, ChatGPT)" list="shopAppsDatalist" required autocomplete="off" style="margin-top:4px;">
+          <datalist id="shopAppsDatalist"></datalist>
+        </div>
+        <div class="form-field">
+          <label>Full Account Price (₱)</label>
+          <input type="number" id="subFullPrice" class="input-control" step="0.01" min="0" placeholder="0.00" required>
         </div>
         <div class="form-grid two-col">
           <div class="form-field">
-            <label>Buy Cost</label>
-            <input type="number" id="subBuyPrice" class="input-control" step="0.01" min="0" required>
+            <label>Solo Profile Price (₱)</label>
+            <input type="number" id="subSoloPrice" class="input-control" step="0.01" min="0" placeholder="0.00" required>
           </div>
           <div class="form-field">
-            <label>Full Account Price</label>
-            <input type="number" id="subFullPrice" class="input-control" step="0.01" min="0" required>
-          </div>
-        </div>
-        <div class="form-grid two-col">
-          <div class="form-field">
-            <label>Solo Profile Price</label>
-            <input type="number" id="subSoloPrice" class="input-control" step="0.01" min="0" required>
-          </div>
-          <div class="form-field">
-            <label>Shared Profile Price</label>
-            <input type="number" id="subSharedPrice" class="input-control" step="0.01" min="0" required>
+            <label>Shared Profile Price (₱)</label>
+            <input type="number" id="subSharedPrice" class="input-control" step="0.01" min="0" placeholder="0.00" required>
           </div>
         </div>
         <div class="form-field">
-          <label>Total Profiles</label>
+          <label>Total Profiles / Slots</label>
           <input type="number" id="subTotalProfiles" class="input-control" value="5" min="1" max="20" required>
         </div>
         <button type="submit" class="btn btn-primary">Create Subscription Product</button>
@@ -2002,31 +1979,25 @@
       <form id="editSubscriptionForm" onsubmit="saveSubscriptionEdit(event)" class="form-grid">
         <input type="hidden" id="editSubProductId">
         <div class="form-field">
-          <label>Subscription Name</label>
-          <input type="text" id="editSubProductName" class="input-control" required>
+          <label>App / Subscription Name</label>
+          <input type="text" id="editSubProductName" class="input-control" list="shopAppsDatalist" required>
+        </div>
+        <div class="form-field">
+          <label>Full Account Price (₱)</label>
+          <input type="number" id="editSubFullPrice" class="input-control" step="0.01" min="0" required>
         </div>
         <div class="form-grid two-col">
           <div class="form-field">
-            <label>Buy Cost</label>
-            <input type="number" id="editSubBuyPrice" class="input-control" step="0.01" min="0" required>
-          </div>
-          <div class="form-field">
-            <label>Full Account Price</label>
-            <input type="number" id="editSubFullPrice" class="input-control" step="0.01" min="0" required>
-          </div>
-        </div>
-        <div class="form-grid two-col">
-          <div class="form-field">
-            <label>Solo Price</label>
+            <label>Solo Profile Price (₱)</label>
             <input type="number" id="editSubSoloPrice" class="input-control" step="0.01" min="0" required>
           </div>
           <div class="form-field">
-            <label>Shared Price</label>
+            <label>Shared Profile Price (₱)</label>
             <input type="number" id="editSubSharedPrice" class="input-control" step="0.01" min="0" required>
           </div>
         </div>
         <div class="form-field">
-          <label>Total Profiles</label>
+          <label>Total Profiles / Slots</label>
           <input type="number" id="editSubTotalProfiles" class="input-control" min="1" max="20" required>
         </div>
         <button type="submit" class="btn btn-primary">Save Changes</button>
@@ -2044,24 +2015,24 @@
       <form id="createAccountForm" onsubmit="saveAccount(event)" class="form-grid">
         <input type="hidden" id="editingAccountOriginalKey">
         <div class="form-field">
-          <label>Account ID / Label</label>
-          <input type="text" id="accountIdInput" class="input-control" placeholder="e.g. NF-001 or email" required>
+          <label>Account ID / Email</label>
+          <input type="text" id="accountIdInput" class="input-control" placeholder="account@email.com" required>
         </div>
         <div class="form-grid two-col">
           <div class="form-field">
-            <label>Service / Category</label>
-            <select id="accountProductSelect" class="select-control">
-              <option value="Netflix">Netflix</option>
-              <option value="Disney">Disney+</option>
-              <option value="HBO">HBO Max</option>
-              <option value="YouTube">YouTube</option>
-              <option value="Prime Video">Prime Video</option>
-              <option value="Spotify">Spotify</option>
-              <option value="Canva">Canva</option>
-              <option value="ChatGPT">ChatGPT</option>
-              <option value="VIU">VIU</option>
-              <option value="Vivamax">Vivamax</option>
-            </select>
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <label style="margin:0;">App / Service</label>
+              <button type="button" class="btn btn-sm btn-outline" onclick="openManageAppsModal()" style="font-size:11px; padding:2px 8px;">⚙️ Manage Apps</button>
+            </div>
+            <div style="display:flex; gap:6px; margin-top:4px;">
+              <select id="accountProductSelect" class="select-control" style="flex:1;" onchange="onAccountAppSelectChange(this.value)">
+                <!-- populated dynamically from shopApps -->
+              </select>
+              <input type="text" id="customAppInput" class="input-control" placeholder="Type new app name" style="flex:1; display:none;">
+              <button type="button" id="btnToggleCustomApp" class="btn btn-sm btn-outline" onclick="toggleCustomAppInput()" title="Type custom app name">
+                ✏️ Custom
+              </button>
+            </div>
           </div>
           <div class="form-field">
             <label>Status</label>
@@ -2086,6 +2057,28 @@
         </div>
         <button type="submit" id="accountModalSubmitBtn" class="btn btn-primary">Save Account</button>
       </form>
+    </div>
+  </div>
+
+  <!-- Manage Apps Modal -->
+  <div id="manageAppsModal" class="modal">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 class="modal-title">Manage Apps & Services</h3>
+        <button type="button" class="modal-close-btn" onclick="closeManageAppsModal()">✕</button>
+      </div>
+      <div class="form-grid">
+        <p style="font-size:12px; color:var(--muted-foreground); margin:0;">
+          Add or remove apps (e.g. Netflix, ChatGPT, CapCut). They will instantly appear in all dropdowns and subscription products.
+        </p>
+        <div style="display:flex; gap:8px;">
+          <input type="text" id="newAppNameInput" class="input-control" placeholder="Enter app name (e.g. CapCut, Claude)">
+          <button type="button" class="btn btn-primary" onclick="addNewAppFromModal()">+ Add App</button>
+        </div>
+        <div id="appsChipsContainer" style="display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; max-height:220px; overflow-y:auto; padding:10px; background:var(--muted); border-radius:10px; border:1px solid var(--border);">
+          <!-- chips -->
+        </div>
+      </div>
     </div>
   </div>
 
@@ -3379,9 +3372,6 @@
       if (document.getElementById('saleDateInput')) {
         document.getElementById('saleDateInput').value = new Date().toISOString().split('T')[0];
       }
-      if (document.getElementById('saleBuyPriceInput')) {
-        document.getElementById('saleBuyPriceInput').value = '';
-      }
       if (document.getElementById('saleCustomCommissionInput')) {
         document.getElementById('saleCustomCommissionInput').value = '';
       }
@@ -3405,38 +3395,21 @@
     function updateProductDropdown() {
       const select = document.getElementById('productSelect');
       if (!select) return;
-      select.innerHTML = '<option value="">-- Select Product --</option>';
+      select.innerHTML = '<option value="">-- Select Subscription Product --</option>';
 
-      const categories = {};
-      products.forEach(p => {
-        const cat = p.category || 'General';
-        if (!categories[cat]) categories[cat] = [];
-        categories[cat].push(p);
-      });
-
-      Object.keys(categories).sort().forEach(cat => {
-        const group = document.createElement('optgroup');
-        group.label = cat;
-        categories[cat].forEach(p => {
-          const opt = document.createElement('option');
-          opt.value = p.id;
-          opt.textContent = `${p.name} — ${formatCurrency(p.sellPrice)}`;
-          group.appendChild(opt);
-        });
-        select.appendChild(group);
-      });
-
-      if (subscriptionProducts.length > 0) {
-        const subGroup = document.createElement('optgroup');
-        subGroup.label = 'Subscriptions';
-        subscriptionProducts.forEach(sp => {
-          const opt = document.createElement('option');
-          opt.value = sp.id;
-          opt.textContent = `${sp.name} — ${formatCurrency(sp.soloPrice || sp.fullPrice)}`;
-          subGroup.appendChild(opt);
-        });
-        select.appendChild(subGroup);
+      const listToDisplay = (subscriptionProducts && subscriptionProducts.length > 0) ? subscriptionProducts : products;
+      if (listToDisplay.length === 0) {
+        select.innerHTML += '<option value="" disabled>No products added yet</option>';
+        return;
       }
+
+      listToDisplay.forEach(sp => {
+        const pPrice = Number(sp.soloPrice || sp.sellPrice || sp.fullPrice || sp.sharedPrice || 0);
+        const opt = document.createElement('option');
+        opt.value = sp.id;
+        opt.textContent = `${sp.name} — ${formatCurrency(pPrice)} (${sp.totalProfiles || 5} profiles)`;
+        select.appendChild(opt);
+      });
     }
 
     document.getElementById('productSelect').addEventListener('change', function() {
@@ -3445,15 +3418,12 @@
       if (product) {
         const defaultPrice = product.sellPrice ?? product.soloPrice ?? product.fullPrice ?? 0;
         document.getElementById('productPriceInput').value = Number(defaultPrice).toFixed(2);
-        if (document.getElementById('saleBuyPriceInput')) {
-          document.getElementById('saleBuyPriceInput').value = Number(product.buyPrice || 0).toFixed(2);
-        }
       }
       displayProductDetails(productId);
       handleProductChangeForProfileTracking(productId);
     });
 
-    ['productQuantity', 'productPriceInput', 'saleBuyPriceInput', 'saleCustomCommissionInput', 'saleAssignedUserSelect'].forEach(id => {
+    ['productQuantity', 'productPriceInput', 'saleCustomCommissionInput', 'saleAssignedUserSelect'].forEach(id => {
       const el = document.getElementById(id);
       if (el) {
         el.addEventListener('input', () => displayProductDetails(document.getElementById('productSelect').value));
@@ -3483,16 +3453,11 @@
 
       const qty = parseInt(document.getElementById('productQuantity').value) || 1;
       const priceInput = document.getElementById('productPriceInput');
-      const buyInput = document.getElementById('saleBuyPriceInput');
       const customCommInput = document.getElementById('saleCustomCommissionInput');
 
-      const buyPrice = (isOwner() && buyInput && buyInput.value !== '')
-        ? (parseFloat(buyInput.value) || 0)
-        : (Number(product.buyPrice) || 0);
-      const baseSell = Number(product.sellPrice ?? product.soloPrice ?? product.fullPrice) || 0;
+      const baseSell = Number(product.soloPrice ?? product.sellPrice ?? product.fullPrice ?? product.sharedPrice) || 0;
       const userPrice = priceInput && priceInput.value ? parseFloat(priceInput.value) : baseSell;
 
-      const actualProfit = userPrice - buyPrice;
       const targetUser = getSelectedSaleTargetUser();
       const existingUserSales = getUserTotalVerifiedSales(targetUser);
       const projectedTotalSales = existingUserSales + (userPrice * qty);
@@ -3500,17 +3465,17 @@
         ? 100
         : getCommissionRateForProfit(projectedTotalSales, targetUser ? targetUser.id : null);
 
-      let unitEarn = calculateUnitCommission(product, userPrice, buyPrice, targetUser, projectedTotalSales);
+      let unitEarn = calculateUnitCommission(product, userPrice, 0, targetUser, projectedTotalSales);
       if (isOwner() && customCommInput && customCommInput.value !== '') {
         unitEarn = parseFloat(customCommInput.value) || 0;
       }
 
       document.getElementById('productPrice').textContent = formatCurrency(userPrice);
-      document.getElementById('productMargin').textContent = formatCurrency(actualProfit);
+      document.getElementById('productMargin').textContent = formatCurrency(userPrice);
       document.getElementById('productCommission').textContent = formatCurrency(unitEarn);
       document.getElementById('totalPrice').textContent = formatCurrency(userPrice * qty);
       const profitPreviewEl = document.getElementById('totalProfitPreview');
-      if (profitPreviewEl) profitPreviewEl.textContent = formatCurrency(actualProfit * qty);
+      if (profitPreviewEl) profitPreviewEl.textContent = formatCurrency(userPrice * qty);
       const ratePreviewEl = document.getElementById('previewRateLabel');
       if (ratePreviewEl) ratePreviewEl.textContent = `${activeRate}%`;
       document.getElementById('totalEarnings').textContent = formatCurrency(unitEarn * qty);
@@ -3665,10 +3630,7 @@
       const quantity = parseInt(document.getElementById('productQuantity').value) || 1;
       const price = parseFloat(document.getElementById('productPriceInput').value) || Number(product.sellPrice || 0);
 
-      const buyInput = document.getElementById('saleBuyPriceInput');
-      const buyPrice = (isOwner() && buyInput && buyInput.value !== '')
-        ? (parseFloat(buyInput.value) || 0)
-        : (Number(product.buyPrice) || 0);
+      const buyPrice = 0;
 
       const targetUser = getSelectedSaleTargetUser();
       const targetUsername = targetUser ? targetUser.username : currentSession.username;
@@ -3755,9 +3717,6 @@
       document.getElementById('productSoldStatus').value = sale.sold ? 'yes' : 'no';
 
       if (isOwner()) {
-        if (document.getElementById('saleBuyPriceInput')) {
-          document.getElementById('saleBuyPriceInput').value = Number(sale.buyPrice ?? 0).toFixed(2);
-        }
         if (document.getElementById('saleCustomCommissionInput')) {
           document.getElementById('saleCustomCommissionInput').value =
             (sale.customCommission !== undefined && sale.customCommission !== null)
@@ -3823,14 +3782,17 @@
       const tbody = document.getElementById('bulkSalesTableBody');
       const tr = document.createElement('tr');
       tr.id = `bulk-row-${rowId}`;
-      const opts = products.map(p => `<option value="${p.id}" data-buy="${p.buyPrice}" data-sell="${p.sellPrice}">${p.name}</option>`).join('');
+      const listToDisplay = (subscriptionProducts && subscriptionProducts.length > 0) ? subscriptionProducts : products;
+      const opts = listToDisplay.map(p => {
+        const sPrice = p.soloPrice || p.sellPrice || p.fullPrice || 0;
+        return `<option value="${p.id}" data-sell="${sPrice}">${p.name}</option>`;
+      }).join('');
       tr.innerHTML = `
         <td><select class="select-control bulk-product" onchange="updateBulkRowDetails(${rowId})"><option value="">-- Select --</option>${opts}</select></td>
         <td><select class="select-control bulk-account-type"><option value="Solo">Solo</option><option value="Shared">Shared</option></select></td>
         <td><select class="select-control bulk-warranty"><option value="FW">FW</option><option value="NW">NW</option></select></td>
         <td><input type="text" class="input-control bulk-username" placeholder="@buyer"></td>
         <td><input type="email" class="input-control bulk-email" placeholder="email@..."></td>
-        <td><input type="number" class="input-control bulk-buy" style="width:80px;" step="0.01"></td>
         <td><input type="number" class="input-control bulk-sell" style="width:80px;" step="0.01"></td>
         <td><input type="number" class="input-control bulk-qty" style="width:65px;" value="1" min="1"></td>
         <td><select class="select-control bulk-status"><option value="yes">Sold</option><option value="no">Stock</option></select></td>
@@ -3851,7 +3813,6 @@
       const sel = row.querySelector('.bulk-product');
       const opt = sel.options[sel.selectedIndex];
       if (opt && opt.value) {
-        row.querySelector('.bulk-buy').value = opt.dataset.buy || 0;
         row.querySelector('.bulk-sell').value = opt.dataset.sell || 0;
       }
     }
@@ -3927,10 +3888,8 @@
 
     // =================== PRODUCTS VIEW ===================
     function switchProductTab(tab) {
-      document.getElementById('tabRegularProducts').classList.toggle('active', tab === 'regular');
-      document.getElementById('tabSubProducts').classList.toggle('active', tab === 'subscription');
-      document.getElementById('regularProductsPane').style.display = tab === 'regular' ? 'block' : 'none';
-      document.getElementById('subscriptionProductsPane').style.display = tab === 'subscription' ? 'block' : 'none';
+      const subPane = document.getElementById('subscriptionProductsPane');
+      if (subPane) subPane.style.display = 'block';
     }
 
     function openAddProductModal() { document.getElementById('addProductModal').classList.add('show'); }
@@ -3964,7 +3923,7 @@
       e.preventDefault();
       if (!isOwner()) return;
       const name = document.getElementById('subProductName').value.trim();
-      const buyPrice = parseFloat(document.getElementById('subBuyPrice').value) || 0;
+      const buyPrice = 0;
       const fullPrice = parseFloat(document.getElementById('subFullPrice').value) || 0;
       const soloPrice = parseFloat(document.getElementById('subSoloPrice').value) || 0;
       const sharedPrice = parseFloat(document.getElementById('subSharedPrice').value) || 0;
@@ -3986,67 +3945,7 @@
     });
 
     function renderProductList() {
-      const container = document.getElementById('productList');
-      if (!container) return;
-      const q = (document.getElementById('productSearch')?.value || '').toLowerCase();
-      const filtered = products.filter(p => p.name.toLowerCase().includes(q) || (p.category || '').toLowerCase().includes(q));
-
-      if (filtered.length === 0) {
-        container.innerHTML = `<div class="empty-box" style="grid-column:1/-1;"><p>No matching products</p></div>`;
-        return;
-      }
-
-      const mySalesTotal = !isOwner() ? Math.max(getUserTotalVerifiedSales(currentSession), 1) : 1;
-
-      container.innerHTML = filtered.map(product => {
-        const buy = Number(product.buyPrice) || 0;
-        const sell = Number(product.sellPrice) || 0;
-        const profit = Math.max(sell - buy, 0);
-        const rate = getCommissionRateForProfit(isOwner() ? sell : mySalesTotal, currentSession?.id);
-        let adminEarns = profit * (rate / 100);
-        let commLabel = `Salary (${rate}% of Profit)`;
-        if (product.commType === 'fixed' && product.commValue > 0) {
-          adminEarns = Number(product.commValue);
-          commLabel = `Fixed Salary`;
-        } else if (product.commType === 'percent' && product.commValue > 0) {
-          adminEarns = (profit * Number(product.commValue)) / 100;
-          commLabel = `Custom (${product.commValue}% of Profit)`;
-        }
-        return `
-          <div class="item-card">
-            <div class="item-card-header">
-              <div>
-                <div class="item-card-title">${product.name}</div>
-                <div class="item-card-sub">${product.category || 'General'}</div>
-              </div>
-              ${isOwner() ? `
-                <div style="display:flex; gap:4px;">
-                  <button class="btn btn-sm btn-outline" onclick="editProduct('${product.id}')">Edit</button>
-                  <button class="btn btn-sm btn-danger" onclick="deleteProduct('${product.id}')">✕</button>
-                </div>
-              ` : `<span class="badge badge-primary">${formatCurrency(adminEarns)} Salary</span>`}
-            </div>
-            <div class="metrics-mini-grid">
-              <div>
-                <div class="metric-mini-label">Sell Price</div>
-                <div class="metric-mini-val">${formatCurrency(sell)}</div>
-              </div>
-              <div>
-                <div class="metric-mini-label">Cost / Capital</div>
-                <div class="metric-mini-val">${formatCurrency(buy)}</div>
-              </div>
-              <div>
-                <div class="metric-mini-label">Profit (Sale–Cap)</div>
-                <div class="metric-mini-val" style="color:var(--success);">${formatCurrency(profit)}</div>
-              </div>
-              <div>
-                <div class="metric-mini-label">${commLabel}</div>
-                <div class="metric-mini-val" style="color:var(--primary);">${formatCurrency(adminEarns)}</div>
-              </div>
-            </div>
-          </div>
-        `;
-      }).join('');
+      renderSubscriptionProducts();
     }
 
     function sortProducts(sortBy) {
@@ -4115,7 +4014,15 @@
       const container = document.getElementById('subscriptionProductList');
       if (!container) return;
       if (subscriptionProducts.length === 0) {
-        container.innerHTML = `<div class="empty-box" style="grid-column:1/-1;"><p>No subscription products yet</p></div>`;
+        container.innerHTML = `
+          <div class="panel-card" style="grid-column:1/-1;">
+            <div class="empty-box">
+              <h4>No Subscription Products</h4>
+              <p>Add subscription services (e.g. Netflix, ChatGPT) to sell and track slots.</p>
+              ${isOwner() ? '<button class="btn btn-primary" onclick="openAddSubscriptionModal()">+ Add First Subscription</button>' : ''}
+            </div>
+          </div>
+        `;
         return;
       }
       container.innerHTML = subscriptionProducts.map(p => {
@@ -4125,20 +4032,28 @@
             <div class="item-card-header">
               <div>
                 <div class="item-card-title">${p.name}</div>
-                <div class="item-card-sub">${avail}/${p.totalProfiles} profiles available</div>
+                <div class="item-card-sub">${p.totalProfiles || 5} profiles capacity</div>
               </div>
               ${isOwner() ? `
-                <div style="display:flex; gap:4px;">
+                <div style="display:flex; gap:6px;">
                   <button class="btn btn-sm btn-outline" onclick="editSubscriptionProduct('${p.id}')">Edit</button>
                   <button class="btn btn-sm btn-danger" onclick="deleteSubscriptionProduct('${p.id}')">✕</button>
                 </div>
               ` : ''}
             </div>
-            <div class="metrics-mini-grid">
-              <div><div class="metric-mini-label">Full</div><div class="metric-mini-val">${formatCurrency(p.fullPrice)}</div></div>
-              <div><div class="metric-mini-label">Solo</div><div class="metric-mini-val">${formatCurrency(p.soloPrice)}</div></div>
-              <div><div class="metric-mini-label">Shared</div><div class="metric-mini-val">${formatCurrency(p.sharedPrice)}</div></div>
-              <div><div class="metric-mini-label">Cost</div><div class="metric-mini-val">${formatCurrency(p.buyPrice)}</div></div>
+            <div class="metrics-mini-grid" style="grid-template-columns: repeat(3, 1fr); gap: 8px;">
+              <div>
+                <div class="metric-mini-label">Solo Profile</div>
+                <div class="metric-mini-val" style="color:var(--primary); font-weight:700;">${formatCurrency(p.soloPrice)}</div>
+              </div>
+              <div>
+                <div class="metric-mini-label">Shared Profile</div>
+                <div class="metric-mini-val" style="color:var(--success); font-weight:700;">${formatCurrency(p.sharedPrice)}</div>
+              </div>
+              <div>
+                <div class="metric-mini-label">Full Account</div>
+                <div class="metric-mini-val" style="font-weight:700;">${formatCurrency(p.fullPrice)}</div>
+              </div>
             </div>
           </div>
         `;
@@ -4151,11 +4066,10 @@
       if (!p) return;
       document.getElementById('editSubProductId').value = p.id;
       document.getElementById('editSubProductName').value = p.name;
-      document.getElementById('editSubBuyPrice').value = p.buyPrice;
-      document.getElementById('editSubFullPrice').value = p.fullPrice;
-      document.getElementById('editSubSoloPrice').value = p.soloPrice;
-      document.getElementById('editSubSharedPrice').value = p.sharedPrice;
-      document.getElementById('editSubTotalProfiles').value = p.totalProfiles;
+      document.getElementById('editSubFullPrice').value = p.fullPrice || 0;
+      document.getElementById('editSubSoloPrice').value = p.soloPrice || 0;
+      document.getElementById('editSubSharedPrice').value = p.sharedPrice || 0;
+      document.getElementById('editSubTotalProfiles').value = p.totalProfiles || 5;
       document.getElementById('editSubscriptionModal').classList.add('show');
     }
     function closeEditSubscriptionModal() { document.getElementById('editSubscriptionModal').classList.remove('show'); }
@@ -4170,17 +4084,26 @@
       while (profiles.length < newTotal) {
         profiles.push({ number: profiles.length + 1, sold: false, soldBy: '', soldDate: '' });
       }
+      const name = document.getElementById('editSubProductName').value.trim();
+      const fullPrice = parseFloat(document.getElementById('editSubFullPrice').value) || 0;
+      const soloPrice = parseFloat(document.getElementById('editSubSoloPrice').value) || 0;
+      const sharedPrice = parseFloat(document.getElementById('editSubSharedPrice').value) || 0;
+
       const updated = {
         ...existing,
-        name: document.getElementById('editSubProductName').value.trim(),
-        buyPrice: parseFloat(document.getElementById('editSubBuyPrice').value) || 0,
-        fullPrice: parseFloat(document.getElementById('editSubFullPrice').value) || 0,
-        soloPrice: parseFloat(document.getElementById('editSubSoloPrice').value) || 0,
-        sharedPrice: parseFloat(document.getElementById('editSubSharedPrice').value) || 0,
+        name,
+        category: name,
+        buyPrice: 0,
+        fullPrice,
+        soloPrice,
+        sharedPrice,
+        sellPrice: soloPrice || fullPrice || sharedPrice,
         totalProfiles: newTotal,
         profiles: profiles.slice(0, newTotal)
       };
+      showSyncingIndicator();
       getRef('subscriptionProducts/' + id).update(updated).then(() => {
+        ensureAppInList(name);
         closeEditSubscriptionModal();
         showToast('Subscription updated!');
       });
@@ -4189,6 +4112,138 @@
     function deleteSubscriptionProduct(id) {
       if (!isOwner() || !confirm('Delete this subscription product?')) return;
       getRef('subscriptionProducts/' + id).remove().then(() => showToast('Deleted'));
+    }
+
+    
+    // =================== APPS & SERVICES STATE ===================
+    let defaultAppsList = ['ChatGPT', 'Netflix', 'Spotify', 'Canva', 'YouTube', 'Disney+', 'Prime Video', 'HBO Max', 'VIU', 'Vivamax', 'CapCut'];
+    let shopApps = [...defaultAppsList];
+
+    function ensureAppInList(appName) {
+      if (!appName) return;
+      const clean = appName.trim();
+      if (!clean) return;
+      if (!shopApps.some(a => a.toLowerCase() === clean.toLowerCase())) {
+        shopApps.push(clean);
+        if (isOwner()) {
+          getRef('settings/appsList').set(shopApps);
+        }
+        renderAppsInDropdowns();
+      }
+    }
+
+    function renderAppsInDropdowns(selectedVal = '') {
+      // 1. Datalist for inputs
+      const datalist = document.getElementById('shopAppsDatalist');
+      if (datalist) {
+        datalist.innerHTML = shopApps.map(app => `<option value="${app}">${app}</option>`).join('');
+      }
+
+      // 2. Account service select in Account Tracker Modal
+      const sel = document.getElementById('accountProductSelect');
+      if (sel) {
+        let opts = `<option value="">-- Select App / Service --</option>`;
+        shopApps.forEach(app => {
+          opts += `<option value="${app}">${app}</option>`;
+        });
+        opts += `<option value="__custom__">➕ + Custom App / Type Name...</option>`;
+        sel.innerHTML = opts;
+        if (selectedVal) {
+          if (!shopApps.includes(selectedVal)) {
+            sel.innerHTML = `<option value="${selectedVal}">${selectedVal}</option>` + sel.innerHTML;
+          }
+          sel.value = selectedVal;
+        }
+      }
+
+      // 3. Chips container in Manage Apps Modal
+      const chips = document.getElementById('appsChipsContainer');
+      if (chips) {
+        chips.innerHTML = shopApps.map(app => `
+          <div style="display:inline-flex; align-items:center; gap:6px; background:var(--card); border:1px solid var(--border); border-radius:9999px; padding:4px 10px; font-size:12px; font-weight:500;">
+            <span>${app}</span>
+            ${isOwner() ? `<button type="button" onclick="deleteAppFromModal('${app}')" style="background:none; border:none; cursor:pointer; color:var(--destructive); font-size:13px; padding:0; line-height:1;" title="Delete app">✕</button>` : ''}
+          </div>
+        `).join('');
+      }
+    }
+
+    function openManageAppsModal() {
+      renderAppsInDropdowns();
+      document.getElementById('manageAppsModal').classList.add('show');
+      const input = document.getElementById('newAppNameInput');
+      if (input) { input.value = ''; setTimeout(() => input.focus(), 80); }
+    }
+
+    function closeManageAppsModal() {
+      document.getElementById('manageAppsModal').classList.remove('show');
+    }
+
+    function addNewAppFromModal() {
+      const input = document.getElementById('newAppNameInput');
+      if (!input) return;
+      const val = input.value.trim();
+      if (!val) {
+        showToast('Enter an app name', 'error');
+        return;
+      }
+      if (shopApps.some(a => a.toLowerCase() === val.toLowerCase())) {
+        showToast('App already exists in list');
+        input.value = '';
+        return;
+      }
+      shopApps.push(val);
+      getRef('settings/appsList').set(shopApps).then(() => {
+        showToast(`Added ${val}!`);
+        input.value = '';
+        renderAppsInDropdowns();
+      });
+    }
+
+    function deleteAppFromModal(appName) {
+      if (!isOwner()) return;
+      if (!confirm(`Remove ${appName} from apps list?`)) return;
+      shopApps = shopApps.filter(a => a !== appName);
+      if (shopApps.length === 0) shopApps = [...defaultAppsList];
+      getRef('settings/appsList').set(shopApps).then(() => {
+        showToast(`Removed ${appName}`);
+        renderAppsInDropdowns();
+      });
+    }
+
+    function toggleCustomAppInput() {
+      const sel = document.getElementById('accountProductSelect');
+      const customInp = document.getElementById('customAppInput');
+      const btn = document.getElementById('btnToggleCustomApp');
+      if (!customInp || !sel) return;
+
+      const isShowingCustom = customInp.style.display !== 'none';
+      if (isShowingCustom) {
+        customInp.style.display = 'none';
+        sel.style.display = 'block';
+        if (btn) btn.textContent = '✏️ Custom';
+      } else {
+        customInp.style.display = 'block';
+        sel.style.display = 'none';
+        customInp.value = sel.value && sel.value !== '__custom__' ? sel.value : '';
+        customInp.focus();
+        if (btn) btn.textContent = '📋 List';
+      }
+    }
+
+    function onAccountAppSelectChange(val) {
+      if (val === '__custom__') {
+        const sel = document.getElementById('accountProductSelect');
+        const customInp = document.getElementById('customAppInput');
+        const btn = document.getElementById('btnToggleCustomApp');
+        if (sel && customInp) {
+          sel.style.display = 'none';
+          customInp.style.display = 'block';
+          customInp.value = '';
+          customInp.focus();
+          if (btn) btn.textContent = '📋 List';
+        }
+      }
     }
 
     // =================== ACCOUNT TRACKER ===================
@@ -4214,7 +4269,13 @@
       document.getElementById('accountModalTitle').textContent = 'Add Streaming Account';
       document.getElementById('accountModalSubmitBtn').textContent = 'Create Account';
       document.getElementById('createAccountForm').reset();
-      populateAccountProductOptions();
+      const customInp = document.getElementById('customAppInput');
+      const sel = document.getElementById('accountProductSelect');
+      const btn = document.getElementById('btnToggleCustomApp');
+      if (customInp) customInp.style.display = 'none';
+      if (sel) sel.style.display = 'block';
+      if (btn) btn.textContent = '✏️ Custom';
+      renderAppsInDropdowns();
       document.getElementById('accountManagementModal').classList.add('show');
     }
     function closeAccountManagementModal() { document.getElementById('accountManagementModal').classList.remove('show'); }
@@ -4226,8 +4287,13 @@
       document.getElementById('accountModalTitle').textContent = 'Edit Streaming Account';
       document.getElementById('accountModalSubmitBtn').textContent = 'Save Changes';
       document.getElementById('accountIdInput').value = acc.id;
-      populateAccountProductOptions(acc.product || 'Netflix');
-      document.getElementById('accountProductSelect').value = acc.product || 'Netflix';
+      const customInp = document.getElementById('customAppInput');
+      const sel = document.getElementById('accountProductSelect');
+      const btn = document.getElementById('btnToggleCustomApp');
+      if (customInp) customInp.style.display = 'none';
+      if (sel) sel.style.display = 'block';
+      if (btn) btn.textContent = '✏️ Custom';
+      renderAppsInDropdowns(acc.product || 'ChatGPT');
       document.getElementById('accountStatus').value = acc.status || 'stock';
       document.getElementById('accountProfilesInput').value = acc.totalProfiles || 5;
       const pType = acc.profileType || 'solo';
@@ -4243,7 +4309,14 @@
       if (!accountId) return;
       const newKey = sanitizeUserKey(accountId);
       const status = document.getElementById('accountStatus').value || 'stock';
-      const product = document.getElementById('accountProductSelect').value;
+
+      const customInp = document.getElementById('customAppInput');
+      const sel = document.getElementById('accountProductSelect');
+      let product = (customInp && customInp.style.display !== 'none' && customInp.value.trim())
+        ? customInp.value.trim()
+        : (sel ? sel.value : 'ChatGPT');
+      if (product === '__custom__') product = 'ChatGPT';
+
       const totalProfiles = parseInt(document.getElementById('accountProfilesInput').value) || 5;
       const profileType = document.querySelector('input[name="accountProfileType"]:checked')?.value || 'solo';
       const slotsPerProfile = profileType === 'solo' ? 1 : 2;
@@ -4262,6 +4335,8 @@
         createdDate: new Date().toISOString().split('T')[0],
         createdBy: currentSession.username
       });
+
+      ensureAppInList(product);
       closeAccountManagementModal();
       showToast(origKey ? 'Account updated!' : 'Account added!');
     }
