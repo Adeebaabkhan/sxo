@@ -1734,7 +1734,9 @@
           </div>
           <div class="form-field">
             <label>Account Email</label>
-            <input type="email" id="accountEmailInput" class="input-control" placeholder="account@email.com" required>
+            <input type="email" id="accountEmailInput" class="input-control" placeholder="account@email.com" list="accountEmailDatalist" required autocomplete="off" oninput="checkAccountEmailStock()">
+            <datalist id="accountEmailDatalist"></datalist>
+            <div id="accountStockHint" style="display:none; font-size:12px; margin-top:4px; font-weight:500;"></div>
           </div>
         </div>
 
@@ -2331,6 +2333,8 @@
         refreshPayoutViews();
       } else if (viewName === 'salary-rules') {
         updateSalarySimulator();
+      } else if (viewName === 'accounts') {
+        renderInventoryDashboard();
       }
     }
 
@@ -2434,6 +2438,7 @@
     let products = [];
     let subscriptionProducts = [];
     let accounts = [];
+    let allSalesForTracking = [];
     let realAdmins = [];
     let editingSale = null;
     let commissionBrackets = [];
@@ -2541,6 +2546,8 @@
       const displayName = (currentSession.customName || currentSession.username).replace(/^@/, '');
       document.getElementById('userName').textContent = displayName;
       document.getElementById('userRole').textContent = isOwner() ? 'Owner' : 'Admin';
+      const clearBtn = document.getElementById('btnClearAll');
+      if (clearBtn && !isOwner()) clearBtn.style.display = 'none';
       const userAv = currentSession.avatar || (users.find(u => u.username === currentUsername)?.avatar);
       if (userAv) {
         document.getElementById('userAvatar').innerHTML = `<img src="${userAv}" alt="Avatar" style="width:100%;height:100%;object-fit:cover;border-radius:9999px;">`;
@@ -2762,6 +2769,7 @@
             }
           });
           sales.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+          allSalesForTracking = sales;
           updateUI();
           updateNotifications();
         });
@@ -2780,9 +2788,35 @@
             sales.push(sale);
           });
           sales.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+          if (!allSalesForTracking || allSalesForTracking.length === 0) {
+            allSalesForTracking = sales;
+          }
           updateUI();
           updateNotifications();
         });
+
+        // Also listen to all sales for inventory tracking across admins
+        try {
+          getRef('sales').on('value', (snapshot) => {
+            const salesData = snapshot.val() || {};
+            const trackingSales = [];
+            Object.keys(salesData).forEach(uKey => {
+              const uSales = salesData[uKey];
+              if (uSales && typeof uSales === 'object') {
+                Object.keys(uSales).forEach(sKey => {
+                  const s = normalizeSaleRecord(uSales[sKey]);
+                  s.id = sKey;
+                  s.userKey = uKey;
+                  trackingSales.push(s);
+                });
+              }
+            });
+            allSalesForTracking = trackingSales;
+            renderInventoryDashboard();
+          });
+        } catch (e) {
+          console.warn('All sales inventory listener notice:', e);
+        }
       }
     }
 
@@ -3173,6 +3207,7 @@
       renderSalesTable();
       updateCharts();
       refreshPayoutViews();
+      renderInventoryDashboard();
     }
 
     // =================== UNIFIED COMMISSION ENGINE ===================
@@ -3335,6 +3370,12 @@
       document.getElementById('productDetailsCard').style.display = 'none';
       document.getElementById('totalEarningsCard').style.display = 'none';
       document.getElementById('profileTrackingFields').style.display = 'none';
+      const hint = document.getElementById('accountStockHint');
+      if (hint) {
+        hint.style.display = 'none';
+        hint.textContent = '';
+      }
+      populateAccountEmailDatalist();
       if (document.getElementById('saleDateInput')) {
         document.getElementById('saleDateInput').value = new Date().toISOString().split('T')[0];
       }
@@ -3478,28 +3519,104 @@
       document.getElementById('totalEarningsCard').style.display = 'block';
     }
 
+    function populateAccountEmailDatalist() {
+      const datalist = document.getElementById('accountEmailDatalist');
+      if (!datalist) return;
+      datalist.innerHTML = accounts.map(acc => {
+        const accSales = getAccountSalesList(acc);
+        const total = parseInt(acc.totalProfiles) || 5;
+        const sold = accSales.reduce((sum, s) => sum + (parseInt(s.quantity) || 1), 0);
+        const left = Math.max(0, total - sold);
+        return `<option value="${acc.id}">${acc.product} • ${left}/${total} slots available</option>`;
+      }).join('');
+    }
+
+    function checkAccountEmailStock() {
+      const emailInput = document.getElementById('accountEmailInput');
+      const hint = document.getElementById('accountStockHint');
+      const qtyInput = document.getElementById('productQuantity');
+      const accSelect = document.getElementById('accountIdSelect');
+      if (!emailInput || !hint) return;
+
+      const emailVal = emailInput.value.trim().toLowerCase();
+      if (!emailVal) {
+        hint.style.display = 'none';
+        return;
+      }
+
+      const matchedAcc = accounts.find(a => (a.id || '').trim().toLowerCase() === emailVal);
+      if (matchedAcc) {
+        if (accSelect) accSelect.value = matchedAcc.id;
+        const accSales = getAccountSalesList(matchedAcc);
+        const total = parseInt(matchedAcc.totalProfiles) || 5;
+        const sold = accSales.reduce((sum, s) => sum + (parseInt(s.quantity) || 1), 0);
+        const left = Math.max(0, total - sold);
+        const reqQty = parseInt(qtyInput?.value) || 1;
+
+        hint.style.display = 'block';
+        if (left <= 0) {
+          hint.style.color = 'var(--destructive)';
+          hint.textContent = `🔴 Account is Sold Out (0/${total} slots remaining)`;
+        } else if (reqQty > left) {
+          hint.style.color = 'var(--warning)';
+          hint.textContent = `⚠️ Only ${left} slot(s) remaining (you entered quantity: ${reqQty})`;
+        } else {
+          hint.style.color = 'var(--success)';
+          hint.textContent = `🟢 Account in stock: ${left} of ${total} slots remaining (${sold} sold)`;
+        }
+      } else {
+        hint.style.display = 'none';
+      }
+    }
+
     function handleProductChangeForProfileTracking(productId) {
       const product = findProductById(productId);
       const wrap = document.getElementById('profileTrackingFields');
-      if (!product) {
-        wrap.style.display = 'none';
+      const accSelect = document.getElementById('accountIdSelect');
+      if (!product || accounts.length === 0) {
+        if (wrap) wrap.style.display = 'none';
         return;
       }
-      const matchingAccounts = accounts.filter(acc => acc.product && product.category && acc.product.includes(product.category) && acc.status !== 'sold');
-      if (matchingAccounts.length > 0) {
+
+      // Smart match: check product name, category, or account product
+      const prodName = (product.name || '').toLowerCase();
+      const prodCat = (product.category || '').toLowerCase();
+
+      let matchingAccounts = accounts.filter(acc => {
+        const accProd = (acc.product || '').toLowerCase();
+        const accId = (acc.id || '').toLowerCase();
+        return (accProd && prodName.includes(accProd)) ||
+               (accProd && accProd.includes(prodName)) ||
+               (prodCat && accProd.includes(prodCat)) ||
+               (accId && prodName.includes(accId));
+      });
+
+      if (matchingAccounts.length === 0) {
+        matchingAccounts = accounts;
+      }
+
+      if (wrap && accSelect) {
         wrap.style.display = 'block';
-        const accSelect = document.getElementById('accountIdSelect');
-        accSelect.innerHTML = '<option value="">-- Direct Sale (No Account Slot) --</option>';
+        accSelect.innerHTML = '<option value="">-- Auto-link by Account Email or Select Below --</option>';
         matchingAccounts.forEach(acc => {
-          accSelect.innerHTML += `<option value="${acc.id}">${acc.id} - ${acc.product}</option>`;
+          const accSales = getAccountSalesList(acc);
+          const total = parseInt(acc.totalProfiles) || 5;
+          const sold = accSales.reduce((sum, s) => sum + (parseInt(s.quantity) || 1), 0);
+          const left = Math.max(0, total - sold);
+          accSelect.innerHTML += `<option value="${acc.id}">${acc.id} (${acc.product} • ${left}/${total} left)</option>`;
         });
-      } else {
-        wrap.style.display = 'none';
       }
     }
 
     function updateProfileStatus() {
       const accountId = document.getElementById('accountIdSelect').value;
+      if (accountId) {
+        const emailInput = document.getElementById('accountEmailInput');
+        if (emailInput) {
+          emailInput.value = accountId;
+        }
+        checkAccountEmailStock();
+      }
       const profileNumber = document.getElementById('profileNumberSelect').value;
       const profileType = document.querySelector('input[name="profileType"]:checked')?.value || 'Solo';
       const disp = document.getElementById('profileStatusDisplay');
@@ -3571,7 +3688,11 @@
 
       const timestamp = Date.now();
       const saleId = isEditing ? editingSale.id : timestamp;
-      const accountId = document.getElementById('accountIdSelect').value || null;
+      let accountId = document.getElementById('accountIdSelect')?.value || null;
+      if (!accountId && accountEmail) {
+        const matchedAcc = accounts.find(a => (a.id || '').trim().toLowerCase() === accountEmail.toLowerCase());
+        if (matchedAcc) accountId = matchedAcc.id;
+      }
       const profileNumber = document.getElementById('profileNumberSelect').value ? parseInt(document.getElementById('profileNumberSelect').value) : null;
       const chosenDate = (isOwner() && document.getElementById('saleDateInput')?.value)
         ? document.getElementById('saleDateInput').value
@@ -3658,6 +3779,14 @@
       if (tRadio) tRadio.checked = true;
 
       displayProductDetails(sale.productId);
+      handleProductChangeForProfileTracking(sale.productId);
+      if (sale.accountId && document.getElementById('accountIdSelect')) {
+        document.getElementById('accountIdSelect').value = sale.accountId;
+      }
+      if (sale.profileNumber && document.getElementById('profileNumberSelect')) {
+        document.getElementById('profileNumberSelect').value = sale.profileNumber;
+      }
+      checkAccountEmailStock();
       const submitBtn = document.querySelector('#addSaleForm button[type="submit"]');
       if (submitBtn) submitBtn.textContent = 'Save Changes';
       document.getElementById('saleModal').classList.add('show');
@@ -3750,6 +3879,13 @@
         const qty = parseInt(row.querySelector('.bulk-qty').value) || 1;
         const comm = calculateUnitCommission(product, price, buyPrice, currentSession);
         const saleId = Date.now() + saved;
+        const bulkBuyer = row.querySelector('.bulk-username').value.trim() || '-';
+        const bulkEmail = row.querySelector('.bulk-email').value.trim() || '-';
+        let bulkAccId = null;
+        if (bulkEmail && bulkEmail !== '-') {
+          const matchedAcc = accounts.find(a => (a.id || '').trim().toLowerCase() === bulkEmail.toLowerCase());
+          if (matchedAcc) bulkAccId = matchedAcc.id;
+        }
         await getRef(`sales/${userKey}/${saleId}`).set({
           id: saleId,
           userId: currentSession.id,
@@ -3760,8 +3896,9 @@
           recordedBy: currentSession.username,
           productId,
           productName: product ? product.name : 'Product',
-          buyerUsername: row.querySelector('.bulk-username').value.trim() || '-',
-          accountEmail: row.querySelector('.bulk-email').value.trim() || '-',
+          buyerUsername: bulkBuyer,
+          accountEmail: bulkEmail,
+          accountId: bulkAccId,
           warranty: row.querySelector('.bulk-warranty').value,
           accountType: row.querySelector('.bulk-account-type').value,
           quantity: qty,
@@ -4055,11 +4192,29 @@
     }
 
     // =================== ACCOUNT TRACKER ===================
+    function populateAccountProductOptions(selectedVal = '') {
+      const sel = document.getElementById('accountProductSelect');
+      if (!sel) return;
+      const standard = ['Netflix', 'Disney+', 'HBO Max', 'YouTube', 'Prime Video', 'Spotify', 'Canva', 'ChatGPT', 'VIU', 'Vivamax'];
+      const set = new Set([...standard]);
+      (products || []).forEach(p => {
+        if (p.name) set.add(p.name);
+        if (p.category) set.add(p.category);
+      });
+      (subscriptionProducts || []).forEach(sp => {
+        if (sp.name) set.add(sp.name);
+      });
+      if (selectedVal) set.add(selectedVal);
+      sel.innerHTML = Array.from(set).map(opt => `<option value="${opt}">${opt}</option>`).join('');
+      if (selectedVal) sel.value = selectedVal;
+    }
+
     function openAccountManagementModal() {
       document.getElementById('editingAccountOriginalKey').value = '';
       document.getElementById('accountModalTitle').textContent = 'Add Streaming Account';
       document.getElementById('accountModalSubmitBtn').textContent = 'Create Account';
       document.getElementById('createAccountForm').reset();
+      populateAccountProductOptions();
       document.getElementById('accountManagementModal').classList.add('show');
     }
     function closeAccountManagementModal() { document.getElementById('accountManagementModal').classList.remove('show'); }
@@ -4071,6 +4226,7 @@
       document.getElementById('accountModalTitle').textContent = 'Edit Streaming Account';
       document.getElementById('accountModalSubmitBtn').textContent = 'Save Changes';
       document.getElementById('accountIdInput').value = acc.id;
+      populateAccountProductOptions(acc.product || 'Netflix');
       document.getElementById('accountProductSelect').value = acc.product || 'Netflix';
       document.getElementById('accountStatus').value = acc.status || 'stock';
       document.getElementById('accountProfilesInput').value = acc.totalProfiles || 5;
@@ -4110,6 +4266,20 @@
       showToast(origKey ? 'Account updated!' : 'Account added!');
     }
 
+    function getAccountSalesList(account) {
+      if (!account || !account.id) return [];
+      const accIdNorm = (account.id || '').trim().toLowerCase();
+      const listToScan = (typeof allSalesForTracking !== 'undefined' && Array.isArray(allSalesForTracking) && allSalesForTracking.length > 0)
+        ? allSalesForTracking
+        : sales;
+      return listToScan.filter(s => {
+        if (!s) return false;
+        const sAccId = (s.accountId || '').trim().toLowerCase();
+        const sAccEmail = (s.accountEmail || '').trim().toLowerCase();
+        return (sAccId && sAccId === accIdNorm) || (sAccEmail && sAccEmail === accIdNorm);
+      });
+    }
+
     function renderInventoryDashboard() {
       const container = document.getElementById('accountsList');
       if (!container) return;
@@ -4127,35 +4297,49 @@
       }
 
       container.innerHTML = accounts.map(account => {
-        const accountSales = sales.filter(s => s.accountId === account.id);
-        const totalRevenue = accountSales.reduce((sum, s) => sum + (Number(s.totalPrice) || 0), 0);
-        const isSold = account.status === 'sold';
+        const accountSales = getAccountSalesList(account);
+        const totalRevenue = accountSales.reduce((sum, s) => sum + (Number(s.totalPrice) || (Number(s.price || 0) * (parseInt(s.quantity) || 1))), 0);
+        const totalProfiles = parseInt(account.totalProfiles) || 5;
+        const slotsSold = accountSales.reduce((sum, s) => sum + (parseInt(s.quantity) || 1), 0);
+        const slotsRemaining = Math.max(0, totalProfiles - slotsSold);
+        const isSoldOut = slotsRemaining === 0 || account.status === 'sold';
+
         return `
           <div class="item-card">
             <div class="item-card-header">
               <div>
                 <div class="item-card-title">${account.id}</div>
-                <div class="item-card-sub">${account.product} • ${account.profileType || 'solo'} (${account.totalProfiles || 5} profiles)</div>
+                <div class="item-card-sub">${account.product} • ${account.profileType || 'solo'} (${totalProfiles} profiles)</div>
               </div>
               <div style="display:flex; align-items:center; gap:6px;">
-                <span class="badge ${isSold ? 'badge-pending' : 'badge-verified'}">${isSold ? 'Sold' : 'In Stock'}</span>
+                <span class="badge ${isSoldOut ? 'badge-pending' : 'badge-verified'}">
+                  ${isSoldOut ? 'Sold Out' : 'In Stock'} (${slotsRemaining}/${totalProfiles} left)
+                </span>
                 <button class="btn btn-sm btn-outline" onclick="editAccount('${account.id}')">Edit</button>
                 ${isOwner() ? `<button class="btn btn-sm btn-danger" onclick="deleteAccount('${account.id}')">✕</button>` : ''}
               </div>
             </div>
-            <div class="metrics-mini-grid">
+            <div class="metrics-mini-grid" style="grid-template-columns: repeat(3, 1fr); gap: 8px;">
               <div>
                 <div class="metric-mini-label">Slots Sold</div>
-                <div class="metric-mini-val">${accountSales.length}</div>
+                <div class="metric-mini-val" style="color:var(--primary); font-weight:700;">${slotsSold} / ${totalProfiles}</div>
+              </div>
+              <div>
+                <div class="metric-mini-label">Available Stock</div>
+                <div class="metric-mini-val" style="color:${slotsRemaining > 0 ? 'var(--success)' : 'var(--destructive)'}; font-weight:700;">
+                  ${slotsRemaining} ${slotsRemaining === 1 ? 'slot' : 'slots'}
+                </div>
               </div>
               <div>
                 <div class="metric-mini-label">Revenue</div>
-                <div class="metric-mini-val">${formatCurrency(totalRevenue)}</div>
+                <div class="metric-mini-val" style="font-weight:700;">${formatCurrency(totalRevenue)}</div>
               </div>
             </div>
           </div>
         `;
       }).join('');
+
+      populateAccountEmailDatalist();
     }
 
     function deleteAccount(accountId) {
@@ -4756,10 +4940,12 @@
     }
 
     function clearAllData() {
-      if (!confirm('Are you sure you want to delete sales data? This cannot be undone.')) return;
-      const userKey = sanitizeUserKey(currentSession.username);
-      const target = isOwner() ? getRef('sales') : getRef('sales/' + userKey);
-      target.remove().then(() => showToast('Sales data cleared'));
+      if (!isOwner()) {
+        showToast('Only owners can clear sales data', 'error');
+        return;
+      }
+      if (!confirm('Are you sure you want to delete all sales data? This cannot be undone.')) return;
+      getRef('sales').remove().then(() => showToast('Sales data cleared'));
     }
 
     // Event Listeners
