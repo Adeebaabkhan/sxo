@@ -842,7 +842,7 @@
 
     .metrics-mini-grid {
       display: grid;
-      grid-template-columns: repeat(2, 1fr);
+      grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
       gap: 8px;
       background-color: var(--muted);
       padding: 10px;
@@ -3375,6 +3375,7 @@
       }
       const submitBtn = document.querySelector('#addSaleForm button[type="submit"]');
       if (submitBtn) submitBtn.textContent = '+ Add Sale';
+      const ownerBox = document.getElementById('ownerSaleOverrides'); if (ownerBox) ownerBox.style.display = isOwner() ? 'block' : 'none';
       document.getElementById('saleModal').classList.add('show');
     }
 
@@ -3382,9 +3383,33 @@
       document.getElementById('saleModal').classList.remove('show');
     }
 
+    function getAllSubscriptionProducts() {
+      const map = new Map();
+      (subscriptionProducts || []).forEach(sp => {
+        if (sp && sp.id) map.set(String(sp.id), { ...sp });
+      });
+      (products || []).forEach(p => {
+        if (p && p.id && !map.has(String(p.id))) {
+          map.set(String(p.id), {
+            id: p.id,
+            name: p.name,
+            category: p.category || p.name,
+            soloPrice: p.sellPrice || 0,
+            sharedPrice: p.sellPrice || 0,
+            fullPrice: p.sellPrice || 0,
+            sellPrice: p.sellPrice || 0,
+            totalProfiles: p.totalProfiles || 5,
+            profiles: p.profiles || [],
+            isFromProducts: true
+          });
+        }
+      });
+      return Array.from(map.values());
+    }
+
     function findProductById(productId) {
-      return products.find(p => String(p.id) === String(productId)) ||
-             subscriptionProducts.find(p => String(p.id) === String(productId));
+      const allSubs = getAllSubscriptionProducts();
+      return allSubs.find(p => String(p.id) === String(productId));
     }
 
     function updateProductDropdown() {
@@ -3392,17 +3417,17 @@
       if (!select) return;
       select.innerHTML = '<option value="">-- Select Subscription Product --</option>';
 
-      const listToDisplay = (subscriptionProducts && subscriptionProducts.length > 0) ? subscriptionProducts : products;
-      if (listToDisplay.length === 0) {
+      const allSubs = getAllSubscriptionProducts();
+      if (allSubs.length === 0) {
         select.innerHTML += '<option value="" disabled>No products added yet</option>';
         return;
       }
 
-      listToDisplay.forEach(sp => {
+      allSubs.forEach(sp => {
         const pPrice = Number(sp.soloPrice || sp.sellPrice || sp.fullPrice || sp.sharedPrice || 0);
         const opt = document.createElement('option');
         opt.value = sp.id;
-        opt.textContent = `${sp.name} — ${formatCurrency(pPrice)} (${sp.totalProfiles || 5} profiles)`;
+        opt.textContent = `${sp.name} — ${formatCurrency(pPrice)}`;
         select.appendChild(opt);
       });
     }
@@ -3584,7 +3609,7 @@
         disp.style.display = 'none';
         return;
       }
-      const existingSales = sales.filter(s => s.accountId === accountId && s.profileNumber === parseInt(profileNumber));
+      const accIdLow = (accountId || '').toLowerCase(); const existingSales = sales.filter(s => (s.accountId === accountId || (s.accountEmail && s.accountEmail.toLowerCase() === accIdLow)) && s.profileNumber === parseInt(profileNumber));
       const maxSlots = profileType === 'Solo' ? 1 : 2;
       const filled = existingSales.length;
       document.getElementById('profileStatusText').textContent = `${filled}/${maxSlots} slots filled`;
@@ -3743,6 +3768,7 @@
       checkAccountEmailStock();
       const submitBtn = document.querySelector('#addSaleForm button[type="submit"]');
       if (submitBtn) submitBtn.textContent = 'Save Changes';
+      const ownerBox = document.getElementById('ownerSaleOverrides'); if (ownerBox) ownerBox.style.display = isOwner() ? 'block' : 'none';
       document.getElementById('saleModal').classList.add('show');
     }
 
@@ -4008,7 +4034,8 @@
     function renderSubscriptionProducts() {
       const container = document.getElementById('subscriptionProductList');
       if (!container) return;
-      if (subscriptionProducts.length === 0) {
+      const allSubs = getAllSubscriptionProducts();
+      if (allSubs.length === 0) {
         container.innerHTML = `
           <div class="panel-card" style="grid-column:1/-1;">
             <div class="empty-box">
@@ -4020,8 +4047,11 @@
         `;
         return;
       }
-      container.innerHTML = subscriptionProducts.map(p => {
+      container.innerHTML = allSubs.map(p => {
         const avail = (p.profiles || []).filter(pr => !pr.sold).length;
+        const solo = p.soloPrice || p.sellPrice || 0;
+        const shared = p.sharedPrice || p.sellPrice || 0;
+        const full = p.fullPrice || p.sellPrice || 0;
         return `
           <div class="item-card">
             <div class="item-card-header">
@@ -4036,18 +4066,18 @@
                 </div>
               ` : ''}
             </div>
-            <div class="metrics-mini-grid" style="grid-template-columns: repeat(3, 1fr); gap: 8px;">
+            <div class="metrics-mini-grid" style="grid-template-columns: repeat(auto-fit, minmax(90px, 1fr)); gap: 8px;">
               <div>
                 <div class="metric-mini-label">Solo Profile</div>
-                <div class="metric-mini-val" style="color:var(--primary); font-weight:700;">${formatCurrency(p.soloPrice)}</div>
+                <div class="metric-mini-val" style="color:var(--primary); font-weight:700;">${formatCurrency(solo)}</div>
               </div>
               <div>
                 <div class="metric-mini-label">Shared Profile</div>
-                <div class="metric-mini-val" style="color:var(--success); font-weight:700;">${formatCurrency(p.sharedPrice)}</div>
+                <div class="metric-mini-val" style="color:var(--success); font-weight:700;">${formatCurrency(shared)}</div>
               </div>
               <div>
                 <div class="metric-mini-label">Full Account</div>
-                <div class="metric-mini-val" style="font-weight:700;">${formatCurrency(p.fullPrice)}</div>
+                <div class="metric-mini-val" style="font-weight:700;">${formatCurrency(full)}</div>
               </div>
             </div>
           </div>
