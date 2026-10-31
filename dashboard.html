@@ -931,6 +931,9 @@
       .form-grid.two-col {
         grid-template-columns: repeat(2, 1fr);
       }
+      .form-grid.three-col {
+        grid-template-columns: repeat(3, 1fr);
+      }
     }
 
     .form-field {
@@ -1989,6 +1992,20 @@
               <label class="radio-pill"><input type="radio" name="accountProfileType" value="solo" checked> Solo</label>
               <label class="radio-pill"><input type="radio" name="accountProfileType" value="shared"> Shared</label>
             </div>
+          </div>
+        </div>
+        <div class="form-grid three-col">
+          <div class="form-field">
+            <label>Account Price (₱)</label>
+            <input type="number" id="accountFullPriceInput" class="input-control" step="0.01" min="0" placeholder="0.00">
+          </div>
+          <div class="form-field">
+            <label>Solo Price (₱)</label>
+            <input type="number" id="accountSoloPriceInput" class="input-control" step="0.01" min="0" placeholder="0.00">
+          </div>
+          <div class="form-field">
+            <label>Shared Price (₱)</label>
+            <input type="number" id="accountSharedPriceInput" class="input-control" step="0.01" min="0" placeholder="0.00">
           </div>
         </div>
         <button type="submit" id="accountModalSubmitBtn" class="btn btn-primary">Save Account</button>
@@ -3698,6 +3715,13 @@
           hint.style.color = 'var(--success)';
           hint.textContent = `🟢 Account in stock: ${left} of ${total} slots remaining (${sold} sold)`;
         }
+        if (matchedAcc.accountPrice || matchedAcc.fullPrice || matchedAcc.soloPrice || matchedAcc.sharedPrice) {
+          const pParts = [];
+          if (matchedAcc.accountPrice || matchedAcc.fullPrice) pParts.push(`Account: ${formatCurrency(matchedAcc.accountPrice || matchedAcc.fullPrice)}`);
+          if (matchedAcc.soloPrice) pParts.push(`Solo: ${formatCurrency(matchedAcc.soloPrice)}`);
+          if (matchedAcc.sharedPrice) pParts.push(`Shared: ${formatCurrency(matchedAcc.sharedPrice)}`);
+          if (pParts.length > 0) hint.textContent += ` • (${pParts.join(', ')})`;
+        }
       } else {
         hint.style.display = 'none';
       }
@@ -4421,7 +4445,27 @@
       }
     }
 
+    function autoFillPricesFromProduct(appName) {
+      if (!appName || appName === '__custom__') return;
+      const allSubs = getAllSubscriptionProducts();
+      const norm = appName.trim().toLowerCase();
+      const match = allSubs.find(p => {
+        const pn = (p.name || '').toLowerCase();
+        const cat = (p.category || '').toLowerCase();
+        return pn === norm || cat === norm || pn.includes(norm) || norm.includes(pn);
+      });
+      if (match) {
+        const fullInp = document.getElementById('accountFullPriceInput');
+        const soloInp = document.getElementById('accountSoloPriceInput');
+        const sharedInp = document.getElementById('accountSharedPriceInput');
+        if (fullInp && !fullInp.value) fullInp.value = match.fullPrice || match.sellPrice || '';
+        if (soloInp && !soloInp.value) soloInp.value = match.soloPrice || match.sellPrice || '';
+        if (sharedInp && !sharedInp.value) sharedInp.value = match.sharedPrice || match.sellPrice || '';
+      }
+    }
+
     function onAccountAppSelectChange(val) {
+      autoFillPricesFromProduct(val);
       if (val === '__custom__') {
         const sel = document.getElementById('accountProductSelect');
         const customInp = document.getElementById('customAppInput');
@@ -4459,6 +4503,9 @@
       document.getElementById('accountModalTitle').textContent = 'Add Streaming Account';
       document.getElementById('accountModalSubmitBtn').textContent = 'Create Account';
       document.getElementById('createAccountForm').reset();
+      if (document.getElementById('accountFullPriceInput')) document.getElementById('accountFullPriceInput').value = '';
+      if (document.getElementById('accountSoloPriceInput')) document.getElementById('accountSoloPriceInput').value = '';
+      if (document.getElementById('accountSharedPriceInput')) document.getElementById('accountSharedPriceInput').value = '';
       const customInp = document.getElementById('customAppInput');
       const sel = document.getElementById('accountProductSelect');
       const btn = document.getElementById('btnToggleCustomApp');
@@ -4489,6 +4536,19 @@
       const pType = acc.profileType || 'solo';
       const radio = document.querySelector(`input[name="accountProfileType"][value="${pType}"]`);
       if (radio) radio.checked = true;
+
+      const fullPriceVal = acc.accountPrice ?? acc.fullPrice ?? '';
+      const soloPriceVal = acc.soloPrice ?? '';
+      const sharedPriceVal = acc.sharedPrice ?? '';
+      if (document.getElementById('accountFullPriceInput')) {
+        document.getElementById('accountFullPriceInput').value = fullPriceVal !== '' ? Number(fullPriceVal) : '';
+      }
+      if (document.getElementById('accountSoloPriceInput')) {
+        document.getElementById('accountSoloPriceInput').value = soloPriceVal !== '' ? Number(soloPriceVal) : '';
+      }
+      if (document.getElementById('accountSharedPriceInput')) {
+        document.getElementById('accountSharedPriceInput').value = sharedPriceVal !== '' ? Number(sharedPriceVal) : '';
+      }
       document.getElementById('accountManagementModal').classList.add('show');
     }
 
@@ -4511,10 +4571,15 @@
       const profileType = document.querySelector('input[name="accountProfileType"]:checked')?.value || 'solo';
       const slotsPerProfile = profileType === 'solo' ? 1 : 2;
 
+      const accountPrice = parseFloat(document.getElementById('accountFullPriceInput')?.value) || 0;
+      const soloPrice = parseFloat(document.getElementById('accountSoloPriceInput')?.value) || 0;
+      const sharedPrice = parseFloat(document.getElementById('accountSharedPriceInput')?.value) || 0;
+
       showSyncingIndicator();
       if (origKey && origKey !== newKey) {
         await getRef('accounts/' + origKey).remove();
       }
+      const existingAcc = accounts.find(a => sanitizeUserKey(a.id) === newKey || a.id === accountId);
       await getRef('accounts/' + newKey).set({
         id: accountId,
         status,
@@ -4522,7 +4587,11 @@
         totalProfiles,
         profileType,
         slotsPerProfile,
-        createdDate: new Date().toISOString().split('T')[0],
+        accountPrice,
+        fullPrice: accountPrice,
+        soloPrice,
+        sharedPrice,
+        createdDate: (existingAcc && existingAcc.createdDate) ? existingAcc.createdDate : new Date().toISOString().split('T')[0],
         createdBy: currentSession.username
       });
 
@@ -4568,6 +4637,10 @@
         const slotsSold = accountSales.reduce((sum, s) => sum + (parseInt(s.quantity) || 1), 0);
         const slotsRemaining = Math.max(0, totalProfiles - slotsSold);
         const isSoldOut = slotsRemaining === 0 || account.status === 'sold';
+        const accPrice = Number(account.accountPrice || account.fullPrice || 0);
+        const soloPrice = Number(account.soloPrice || 0);
+        const sharedPrice = Number(account.sharedPrice || 0);
+        const hasPricing = accPrice > 0 || soloPrice > 0 || sharedPrice > 0;
 
         return `
           <div class="item-card">
@@ -4600,6 +4673,22 @@
                 <div class="metric-mini-val" style="font-weight:700;">${formatCurrency(totalRevenue)}</div>
               </div>
             </div>
+            ${hasPricing ? `
+            <div class="metrics-mini-grid" style="grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border);">
+              <div>
+                <div class="metric-mini-label">Account Price</div>
+                <div class="metric-mini-val" style="font-size:12px; font-weight:700;">${formatCurrency(accPrice)}</div>
+              </div>
+              <div>
+                <div class="metric-mini-label">Solo Price</div>
+                <div class="metric-mini-val" style="color:var(--primary); font-size:12px; font-weight:700;">${formatCurrency(soloPrice)}</div>
+              </div>
+              <div>
+                <div class="metric-mini-label">Shared Price</div>
+                <div class="metric-mini-val" style="color:var(--success); font-size:12px; font-weight:700;">${formatCurrency(sharedPrice)}</div>
+              </div>
+            </div>
+            ` : ''}
           </div>
         `;
       }).join('');
