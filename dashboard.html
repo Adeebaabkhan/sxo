@@ -751,6 +751,21 @@
       color: var(--warning);
     }
 
+    .badge-ongoing {
+      background-color: rgba(34, 197, 94, 0.15);
+      color: var(--success);
+    }
+
+    .badge-void {
+      background-color: rgba(239, 68, 68, 0.15);
+      color: var(--destructive);
+    }
+
+    .badge-reported {
+      background-color: rgba(245, 158, 11, 0.15);
+      color: var(--warning);
+    }
+
     .badge-primary {
       background-color: var(--primary-soft);
       color: var(--primary);
@@ -1339,8 +1354,9 @@
             </div>
             <select id="salesStatusFilter" class="select-control">
               <option value="all">All Status</option>
-              <option value="sold">Verified / Sold</option>
-              <option value="pending">Pending / Stock</option>
+              <option value="ongoing">Ongoing</option>
+              <option value="void">Void</option>
+              <option value="reported">Reported</option>
             </select>
             <select id="salesPeriodFilter" class="select-control">
               <option value="all">All Dates</option>
@@ -1758,8 +1774,9 @@
         <div class="form-field">
           <label>Sale Status</label>
           <select id="productSoldStatus" class="select-control">
-            <option value="yes">Verified / Sold</option>
-            <option value="no">Pending / In Stock</option>
+            <option value="ongoing">Ongoing</option>
+            <option value="void">Void</option>
+            <option value="reported">Reported</option>
           </select>
         </div>
 
@@ -1818,13 +1835,7 @@
               <select id="soldBySelect" class="select-control"></select>
             </div>
           </div>
-          <div class="form-field" style="margin-top:8px;">
-            <label>Slot Mode</label>
-            <div class="radio-pill-group">
-              <label class="radio-pill"><input type="radio" name="profileType" value="Solo" checked onchange="updateProfileStatus()"> Solo (1 slot)</label>
-              <label class="radio-pill"><input type="radio" name="profileType" value="Shared" onchange="updateProfileStatus()"> Shared (2 slots)</label>
-            </div>
-          </div>
+
           <div id="profileStatusDisplay" style="display:none; margin-top:8px; font-size:12px;">
             <div id="profileStatusText" style="font-weight:600;"></div>
             <div id="profileSlotDetails" style="color:var(--muted-foreground); margin-top:4px;"></div>
@@ -2881,13 +2892,26 @@
       }
     }
 
+    function getStatusBadge(st) {
+      const s = (st || 'ongoing').toLowerCase().trim();
+      if (s === 'void') return '<span class="badge badge-void">Void</span>';
+      if (s === 'reported') return '<span class="badge badge-reported">Reported</span>';
+      return '<span class="badge badge-ongoing">Ongoing</span>';
+    }
+
     function normalizeSaleRecord(rawSale = {}) {
       const sale = { ...rawSale };
       sale.quantity = parseInt(sale.quantity) || 1;
       sale.price = Number(sale.price || sale.sellPrice) || 0;
       sale.tip = Number(rawSale.tip) || 0;
       sale.totalPrice = Number(rawSale.totalPrice) || ((sale.price * sale.quantity) + sale.tip);
-      sale.sold = sale.sold !== false;
+      let st = (rawSale.status || '').toLowerCase().trim();
+      if (!st || !['ongoing', 'void', 'reported'].includes(st)) {
+        if (rawSale.sold === false || rawSale.sold === 'no') st = 'void';
+        else st = 'ongoing';
+      }
+      sale.status = st;
+      sale.sold = (st === 'ongoing');
       sale.receiptUrl = rawSale.receiptUrl || null;
       
       const hasBuyPrice = sale.buyPrice !== undefined && sale.buyPrice !== null && sale.buyPrice !== '' && !isNaN(sale.buyPrice);
@@ -3135,7 +3159,7 @@
           </td>
           <td style="color:var(--muted-foreground);">${formatCurrency((Number(s.buyPrice) || 0) * (parseInt(s.quantity) || 1))}</td>
           <td style="color:var(--success); font-weight:600;">${formatCurrency(Math.max((Number(s.totalPrice) || 0) - ((Number(s.buyPrice) || 0) * (parseInt(s.quantity) || 1)), 0))}</td>
-          <td><span class="badge ${s.sold ? 'badge-verified' : 'badge-pending'}">${s.sold ? 'Verified' : 'Pending'}</span></td>
+          <td>${getStatusBadge(s.status)}</td>
         </tr>
       `).join('');
     }
@@ -3216,15 +3240,18 @@
       const revCanvas = document.getElementById('revenueChart');
       if (revCanvas) {
         if (revenueChart) revenueChart.destroy();
-        const soldCount = filtered.filter(s => s.sold).length;
-        const pendingCount = filtered.filter(s => !s.sold).length;
+        const ongoingCount = filtered.filter(s => (s.status || (s.sold ? 'ongoing' : 'void')) === 'ongoing').length;
+        const voidCount = filtered.filter(s => (s.status || (s.sold ? 'ongoing' : 'void')) === 'void').length;
+        const reportedCount = filtered.filter(s => (s.status || (s.sold ? 'ongoing' : 'void')) === 'reported').length;
         revenueChart = new Chart(revCanvas.getContext('2d'), {
           type: 'doughnut',
           data: {
-            labels: ['Verified / Sold', 'Pending'],
+            labels: ['Ongoing', 'Void', 'Reported'],
             datasets: [{
-              data: soldCount === 0 && pendingCount === 0 ? [1, 0] : [soldCount, pendingCount],
-              backgroundColor: ['#9e2a3b', '#eab308'],
+              data: (ongoingCount === 0 && voidCount === 0 && reportedCount === 0)
+                ? [1, 0, 0]
+                : [ongoingCount, voidCount, reportedCount],
+              backgroundColor: ['#22c55e', '#ef4444', '#f59e0b'],
               borderWidth: 0
             }]
           },
@@ -3378,10 +3405,8 @@
         );
       }
 
-      if (statusFilter === 'sold') {
-        filtered = filtered.filter(s => s.sold);
-      } else if (statusFilter === 'pending') {
-        filtered = filtered.filter(s => !s.sold);
+      if (statusFilter && statusFilter !== 'all') {
+        filtered = filtered.filter(s => (s.status || (s.sold ? 'ongoing' : 'void')).toLowerCase() === statusFilter);
       }
 
       document.getElementById('salesCountSubtitle').textContent = `${filtered.length} record${filtered.length === 1 ? '' : 's'}`;
@@ -3426,10 +3451,8 @@
               ` : '<span style="color:var(--muted-foreground); font-size:12px;">—</span>'}
             </td>
             <td>
-              <button type="button" onclick="toggleSaleStatus('${sale.id}')" style="background:none; border:none; padding:0; cursor:pointer;" title="Click to toggle status">
-                <span class="badge ${sale.sold ? 'badge-verified' : 'badge-pending'}">
-                  ${sale.sold ? 'Verified' : 'Pending'}
-                </span>
+              <button type="button" onclick="toggleSaleStatus('${sale.id}')" style="background:none; border:none; padding:0; cursor:pointer;" title="Click to cycle status (Ongoing ➔ Reported ➔ Void)">
+                ${getStatusBadge(sale.status)}
               </button>
             </td>
             <td>
@@ -3447,10 +3470,18 @@
       const sale = sales.find(s => String(s.id) === String(saleId));
       if (!sale) return;
       const userKey = sale.userKey || sanitizeUserKey(sale.soldBy || currentSession.username);
-      const nextSold = !sale.sold;
+      const curr = (sale.status || (sale.sold ? 'ongoing' : 'void')).toLowerCase();
+      let nextStatus = 'ongoing';
+      if (curr === 'ongoing') nextStatus = 'reported';
+      else if (curr === 'reported') nextStatus = 'void';
+      else nextStatus = 'ongoing';
+
       showSyncingIndicator();
-      getRef(`sales/${userKey}/${saleId}`).update({ sold: nextSold }).then(() => {
-        showToast(`Marked as ${nextSold ? 'Verified / Sold' : 'Pending'}`);
+      getRef(`sales/${userKey}/${saleId}`).update({
+        status: nextStatus,
+        sold: nextStatus === 'ongoing'
+      }).then(() => {
+        showToast(`Status changed to ${nextStatus.toUpperCase()}`);
         autoCalculatePayouts();
       });
     }
@@ -3478,6 +3509,9 @@
       }
       if (document.getElementById('saleAssignedUserSelect') && currentSession) {
         document.getElementById('saleAssignedUserSelect').value = currentSession.username;
+      }
+      if (document.getElementById('productSoldStatus')) {
+        document.getElementById('productSoldStatus').value = 'ongoing';
       }
       const submitBtn = document.querySelector('#addSaleForm button[type="submit"]');
       if (submitBtn) submitBtn.textContent = '+ Add Sale';
@@ -3776,7 +3810,7 @@
         checkAccountEmailStock();
       }
       const profileNumber = document.getElementById('profileNumberSelect').value;
-      const profileType = document.querySelector('input[name="profileType"]:checked')?.value || 'Solo';
+      const profileType = document.querySelector('input[name="accountType"]:checked')?.value || 'Solo';
       const disp = document.getElementById('profileStatusDisplay');
       if (!accountId || !profileNumber) {
         disp.style.display = 'none';
@@ -3879,7 +3913,8 @@
         customCommission: hasCustomCommission ? commissionAmount : null,
         totalPrice: (price * quantity) + tip,
         totalCommission: (commissionAmount * quantity) + tip,
-        sold: document.getElementById('productSoldStatus').value === 'yes',
+        status: document.getElementById('productSoldStatus').value || 'ongoing',
+        sold: (document.getElementById('productSoldStatus').value || 'ongoing') === 'ongoing',
         date: chosenDate,
         timestamp: isEditing && editingSale.timestamp ? editingSale.timestamp : timestamp,
         receiptUrl: document.getElementById('saleReceiptUrlInput')?.value.trim() || null
@@ -3916,7 +3951,8 @@
       }
       document.getElementById('buyerUsernameInput').value = sale.buyerUsername || '';
       document.getElementById('accountEmailInput').value = sale.accountEmail || '';
-      document.getElementById('productSoldStatus').value = sale.sold ? 'yes' : 'no';
+      const currStatus = (sale.status || (sale.sold ? 'ongoing' : 'void')).toLowerCase();
+      document.getElementById('productSoldStatus').value = ['void', 'ongoing', 'reported'].includes(currStatus) ? currStatus : (sale.sold ? 'ongoing' : 'void');
 
       if (isOwner()) {
         if (document.getElementById('saleCustomCommissionInput')) {
@@ -3999,7 +4035,7 @@
         <td><input type="number" class="input-control bulk-sell" style="width:80px;" step="0.01"></td>
         <td><input type="number" class="input-control bulk-qty" style="width:65px;" value="1" min="1"></td>
         <td><input type="number" class="input-control bulk-tip" style="width:65px;" placeholder="0" step="0.01"></td>
-        <td><select class="select-control bulk-status"><option value="yes">Sold</option><option value="no">Stock</option></select></td>
+        <td><select class="select-control bulk-status"><option value="ongoing">Ongoing</option><option value="void">Void</option><option value="reported">Reported</option></select></td>
         <td><button type="button" class="btn btn-sm btn-danger" onclick="removeBulkRow(${rowId})">✕</button></td>
       `;
       tbody.appendChild(tr);
@@ -4075,7 +4111,8 @@
           tip: tip,
           totalPrice: (price * qty) + tip,
           totalCommission: (comm * qty) + tip,
-          sold: row.querySelector('.bulk-status').value === 'yes',
+          status: row.querySelector('.bulk-status').value || 'ongoing',
+          sold: (row.querySelector('.bulk-status').value || 'ongoing') === 'ongoing',
           date: new Date().toISOString().split('T')[0],
           timestamp: Date.now()
         });
@@ -5280,9 +5317,9 @@
 
     function exportToCSV() {
       const filtered = getFilteredSales();
-      let csv = 'Date,Admin,Product,Buyer Username,Account Email,Warranty,Type,Qty,Price,Total,Sold\n';
+      let csv = 'Date,Admin,Product,Buyer Username,Account Email,Warranty,Type,Qty,Price,Total,Status\n';
       filtered.forEach(s => {
-        csv += `"${s.date || ''}","${s.userName || ''}","${s.productName || ''}","${s.buyerUsername || ''}","${s.accountEmail || ''}","${s.warranty || ''}","${s.accountType || ''}",${s.quantity},${s.price},${s.totalPrice},${s.sold ? 'Yes' : 'No'}\n`;
+        csv += `"${s.date || ''}","${s.userName || ''}","${s.productName || ''}","${s.buyerUsername || ''}","${s.accountEmail || ''}","${s.warranty || ''}","${s.accountType || ''}",${s.quantity},${s.price},${s.totalPrice},"${s.status || (s.sold ? 'ongoing' : 'void')}"\n`;
       });
       const blob = new Blob([csv], { type: 'text/csv' });
       const url = window.URL.createObjectURL(blob);
