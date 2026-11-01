@@ -1964,9 +1964,15 @@
       </div>
       <form id="createAccountForm" onsubmit="saveAccount(event)" class="form-grid">
         <input type="hidden" id="editingAccountOriginalKey">
-        <div class="form-field">
-          <label>Account ID / Email</label>
-          <input type="text" id="accountIdInput" class="input-control" placeholder="account@email.com" required>
+        <div class="form-grid two-col">
+          <div class="form-field">
+            <label>Account ID / Email</label>
+            <input type="text" id="accountIdInput" class="input-control" placeholder="account@email.com" required>
+          </div>
+          <div class="form-field">
+            <label>Account Password</label>
+            <input type="text" id="accountPasswordInput" class="input-control" placeholder="Enter password (optional)">
+          </div>
         </div>
         <div class="form-grid two-col">
           <div class="form-field">
@@ -4540,6 +4546,7 @@
       document.getElementById('accountModalTitle').textContent = 'Add Streaming Account';
       document.getElementById('accountModalSubmitBtn').textContent = 'Create Account';
       document.getElementById('createAccountForm').reset();
+      if (document.getElementById('accountPasswordInput')) document.getElementById('accountPasswordInput').value = '';
       if (document.getElementById('accountFullPriceInput')) document.getElementById('accountFullPriceInput').value = '';
       if (document.getElementById('accountSoloPriceInput')) document.getElementById('accountSoloPriceInput').value = '';
       if (document.getElementById('accountSharedPriceInput')) document.getElementById('accountSharedPriceInput').value = '';
@@ -4561,6 +4568,9 @@
       document.getElementById('accountModalTitle').textContent = 'Edit Streaming Account';
       document.getElementById('accountModalSubmitBtn').textContent = 'Save Changes';
       document.getElementById('accountIdInput').value = acc.id;
+      if (document.getElementById('accountPasswordInput')) {
+        document.getElementById('accountPasswordInput').value = acc.password || acc.accountPassword || '';
+      }
       const customInp = document.getElementById('customAppInput');
       const sel = document.getElementById('accountProductSelect');
       const btn = document.getElementById('btnToggleCustomApp');
@@ -4608,6 +4618,7 @@
       const profileType = document.querySelector('input[name="accountProfileType"]:checked')?.value || 'solo';
       const slotsPerProfile = profileType === 'solo' ? 1 : 2;
 
+      const password = document.getElementById('accountPasswordInput')?.value.trim() || '';
       const accountPrice = parseFloat(document.getElementById('accountFullPriceInput')?.value) || 0;
       const soloPrice = parseFloat(document.getElementById('accountSoloPriceInput')?.value) || 0;
       const sharedPrice = parseFloat(document.getElementById('accountSharedPriceInput')?.value) || 0;
@@ -4619,6 +4630,7 @@
       const existingAcc = accounts.find(a => sanitizeUserKey(a.id) === newKey || a.id === accountId);
       await getRef('accounts/' + newKey).set({
         id: accountId,
+        password,
         status,
         product,
         totalProfiles,
@@ -4684,7 +4696,9 @@
             <div class="item-card-header">
               <div>
                 <div class="item-card-title">${account.id}</div>
-                <div class="item-card-sub">${account.product} • ${account.profileType || 'solo'} (${totalProfiles} profiles)</div>
+                <div class="item-card-sub">
+                  ${account.product} • ${account.profileType || 'solo'} (${totalProfiles} profiles)${(account.password || account.accountPassword) ? ` • <span style="color:var(--foreground); font-weight:600;" title="Account Password">🔑 ${account.password || account.accountPassword}</span>` : ''}
+                </div>
               </div>
               <div style="display:flex; align-items:center; gap:6px;">
                 <span class="badge ${isSoldOut ? 'badge-pending' : 'badge-verified'}">
