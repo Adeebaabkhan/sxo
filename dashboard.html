@@ -1815,14 +1815,23 @@
             </div>
             <div class="form-field">
               <label>Profile Number</label>
-              <select id="profileNumberSelect" class="select-control" onchange="updateProfileStatus()">
-                <option value="">-- Select Profile --</option>
-                <option value="1">Profile 1</option>
-                <option value="2">Profile 2</option>
-                <option value="3">Profile 3</option>
-                <option value="4">Profile 4</option>
-                <option value="5">Profile 5</option>
-              </select>
+              <div style="display:flex; gap:6px;">
+                <select id="profileNumberSelect" class="select-control" style="flex:1;" onchange="handleProfileSelectChange(this.value)">
+                  <option value="">-- Select Profile --</option>
+                  <option value="1">Profile 1</option>
+                  <option value="2">Profile 2</option>
+                  <option value="3">Profile 3</option>
+                  <option value="4">Profile 4</option>
+                  <option value="5">Profile 5</option>
+                  <option value="6">Profile 6</option>
+                  <option value="7">Profile 7</option>
+                  <option value="8">Profile 8</option>
+                  <option value="9">Profile 9</option>
+                  <option value="10">Profile 10</option>
+                  <option value="__custom__">➕ Custom Profile #...</option>
+                </select>
+                <input type="text" id="customProfileNumberInput" class="input-control" placeholder="Profile #" style="width:90px; display:none;" oninput="updateProfileStatus()">
+              </div>
             </div>
           </div>
           <div class="form-grid two-col" style="margin-top:8px;">
@@ -3513,6 +3522,11 @@
       if (document.getElementById('saleCustomCommissionInput')) {
         document.getElementById('saleCustomCommissionInput').value = '';
       }
+      updateProfileOptions(10);
+      if (document.getElementById('customProfileNumberInput')) {
+        document.getElementById('customProfileNumberInput').style.display = 'none';
+        document.getElementById('customProfileNumberInput').value = '';
+      }
       if (document.getElementById('saleAssignedUserSelect') && currentSession) {
         document.getElementById('saleAssignedUserSelect').value = currentSession.username;
       }
@@ -3798,11 +3812,56 @@
         accSelect.innerHTML = '<option value="">-- Auto-link by Account Email or Select Below --</option>';
         matchingAccounts.forEach(acc => {
           const accSales = getAccountSalesList(acc);
-          const total = parseInt(acc.totalProfiles) || 5;
+          const total = parseInt(acc.totalProfiles) || 10;
           const sold = accSales.reduce((sum, s) => sum + (parseInt(s.quantity) || 1), 0);
           const left = Math.max(0, total - sold);
-          accSelect.innerHTML += `<option value="${acc.id}">${acc.id} (${acc.product} • ${left}/${total} left)</option>`;
+          accSelect.innerHTML += `<option value="${acc.id}" data-profiles="${total}">${acc.id} (${acc.product} • ${left}/${total} left)</option>`;
         });
+      }
+    }
+
+    function handleProfileSelectChange(val) {
+      const customInp = document.getElementById('customProfileNumberInput');
+      if (val === '__custom__') {
+        if (customInp) {
+          customInp.style.display = 'block';
+          customInp.value = '';
+          customInp.focus();
+        }
+      } else {
+        if (customInp) {
+          customInp.style.display = 'none';
+          customInp.value = '';
+        }
+      }
+      updateProfileStatus();
+    }
+
+    function updateProfileOptions(count = 10, selectedVal = '') {
+      const sel = document.getElementById('profileNumberSelect');
+      if (!sel) return;
+      const currentSelected = selectedVal !== undefined && selectedVal !== null && selectedVal !== '' ? String(selectedVal) : sel.value;
+      const numProfiles = Math.max(10, parseInt(count) || 10);
+      let html = '<option value="">-- Select Profile --</option>';
+      for (let i = 1; i <= numProfiles; i++) {
+        html += `<option value="${i}">Profile ${i}</option>`;
+      }
+      html += '<option value="__custom__">➕ Custom Profile #...</option>';
+      sel.innerHTML = html;
+
+      const customInp = document.getElementById('customProfileNumberInput');
+      if (currentSelected && currentSelected !== '__custom__') {
+        const hasVal = Array.from(sel.options).some(o => o.value === String(currentSelected));
+        if (hasVal) {
+          sel.value = String(currentSelected);
+          if (customInp) customInp.style.display = 'none';
+        } else {
+          sel.value = '__custom__';
+          if (customInp) {
+            customInp.style.display = 'block';
+            customInp.value = currentSelected;
+          }
+        }
       }
     }
 
@@ -3815,14 +3874,18 @@
         }
         checkAccountEmailStock();
       }
-      const profileNumber = document.getElementById('profileNumberSelect').value;
+      let profileNumber = document.getElementById('profileNumberSelect')?.value;
+      if (profileNumber === '__custom__') {
+        profileNumber = document.getElementById('customProfileNumberInput')?.value.trim();
+      }
       const profileType = document.querySelector('input[name="accountType"]:checked')?.value || 'Solo';
       const disp = document.getElementById('profileStatusDisplay');
       if (!accountId || !profileNumber) {
         disp.style.display = 'none';
         return;
       }
-      const accIdLow = (accountId || '').toLowerCase(); const existingSales = sales.filter(s => (s.accountId === accountId || (s.accountEmail && s.accountEmail.toLowerCase() === accIdLow)) && s.profileNumber === parseInt(profileNumber));
+      const accIdLow = (accountId || '').toLowerCase();
+      const existingSales = sales.filter(s => (s.accountId === accountId || (s.accountEmail && s.accountEmail.toLowerCase() === accIdLow)) && String(s.profileNumber) === String(profileNumber));
       const maxSlots = profileType === 'Solo' ? 1 : 2;
       const filled = existingSales.length;
       document.getElementById('profileStatusText').textContent = `${filled}/${maxSlots} slots filled`;
@@ -3889,7 +3952,11 @@
         const matchedAcc = accounts.find(a => (a.id || '').trim().toLowerCase() === accountEmail.toLowerCase());
         if (matchedAcc) accountId = matchedAcc.id;
       }
-      const profileNumber = document.getElementById('profileNumberSelect').value ? parseInt(document.getElementById('profileNumberSelect').value) : null;
+      let profileNumVal = document.getElementById('profileNumberSelect')?.value;
+      if (profileNumVal === '__custom__') {
+        profileNumVal = document.getElementById('customProfileNumberInput')?.value.trim();
+      }
+      const profileNumber = profileNumVal ? (parseInt(profileNumVal) || profileNumVal) : null;
       const chosenDate = (isOwner() && document.getElementById('saleDateInput')?.value)
         ? document.getElementById('saleDateInput').value
         : (isEditing && editingSale.date ? editingSale.date : new Date().toISOString().split('T')[0]);
@@ -3986,8 +4053,12 @@
       if (sale.accountId && document.getElementById('accountIdSelect')) {
         document.getElementById('accountIdSelect').value = sale.accountId;
       }
-      if (sale.profileNumber && document.getElementById('profileNumberSelect')) {
-        document.getElementById('profileNumberSelect').value = sale.profileNumber;
+      if (sale.profileNumber !== undefined && sale.profileNumber !== null && sale.profileNumber !== '') {
+        const accMatch = accounts.find(a => a.id === sale.accountId || a.id === sale.accountEmail);
+        const count = accMatch ? (parseInt(accMatch.totalProfiles) || 10) : 10;
+        updateProfileOptions(Math.max(10, count), sale.profileNumber);
+      } else {
+        updateProfileOptions(10);
       }
       checkAccountEmailStock();
       const submitBtn = document.querySelector('#addSaleForm button[type="submit"]');
