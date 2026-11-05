@@ -978,12 +978,13 @@
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      padding: 6px 12px;
+      padding: 6px 10px;
       border-radius: 8px;
       border: 1px solid var(--border);
       background-color: var(--card);
       font-size: 12px;
       cursor: pointer;
+      white-space: nowrap;
     }
 
     .summary-strip {
@@ -1767,6 +1768,7 @@
             <div class="radio-pill-group">
               <label class="radio-pill"><input type="radio" name="accountType" value="Solo" checked> Solo</label>
               <label class="radio-pill"><input type="radio" name="accountType" value="Shared"> Shared</label>
+              <label class="radio-pill"><input type="radio" name="accountType" value="Invite"> Invite</label>
             </div>
           </div>
         </div>
@@ -1918,10 +1920,11 @@
           </div>
         </div>
         <div class="form-field">
-          <label>Choose whether it's Shared or Solo</label>
+          <label>Choose whether it's Shared, Solo, or Invite</label>
           <div class="radio-pill-group">
             <label class="radio-pill"><input type="radio" name="newProductTypeRadio" value="Shared" checked> Shared</label>
             <label class="radio-pill"><input type="radio" name="newProductTypeRadio" value="Solo"> Solo</label>
+            <label class="radio-pill"><input type="radio" name="newProductTypeRadio" value="Invite"> Invite</label>
           </div>
         </div>
         <button type="submit" class="btn btn-primary">+ Add Product</button>
@@ -1953,10 +1956,11 @@
           </div>
         </div>
         <div class="form-field">
-          <label>Choose whether it's Shared or Solo</label>
+          <label>Choose whether it's Shared, Solo, or Invite</label>
           <div class="radio-pill-group">
             <label class="radio-pill"><input type="radio" name="editProductTypeRadio" id="editTypeSharedRadio" value="Shared" checked> Shared</label>
             <label class="radio-pill"><input type="radio" name="editProductTypeRadio" id="editTypeSoloRadio" value="Solo"> Solo</label>
+            <label class="radio-pill"><input type="radio" name="editProductTypeRadio" id="editTypeInviteRadio" value="Invite"> Invite</label>
           </div>
         </div>
         <button type="submit" class="btn btn-primary">Save Changes</button>
@@ -2017,6 +2021,7 @@
             <div class="radio-pill-group" style="margin-top:4px;">
               <label class="radio-pill"><input type="radio" name="accountProfileType" value="solo" checked> Solo</label>
               <label class="radio-pill"><input type="radio" name="accountProfileType" value="shared"> Shared</label>
+              <label class="radio-pill"><input type="radio" name="accountProfileType" value="invite"> Invite</label>
             </div>
           </div>
         </div>
@@ -3545,11 +3550,13 @@
 
             function getProductType(p) {
       if (!p) return 'Shared';
-      if (p.type === 'Solo' || p.type === 'Shared') return p.type;
+      if (p.type === 'Solo' || p.type === 'Shared' || p.type === 'Invite') return p.type;
       const types = Array.isArray(p.accountTypes) ? p.accountTypes : [];
+      if (types.includes('Invite')) return 'Invite';
       if (types.includes('Solo') && !types.includes('Shared')) return 'Solo';
       if (types.includes('Shared') && !types.includes('Solo')) return 'Shared';
       const n = (p.name || '').toLowerCase();
+      if (n.includes('invite')) return 'Invite';
       if (n.includes('solo') || /\bsla\b/.test(n)) return 'Solo';
       return 'Shared';
     }
@@ -3637,10 +3644,14 @@
         if (document.getElementById('saleBuyPriceInput')) {
           document.getElementById('saleBuyPriceInput').value = Number(buy).toFixed(2);
         }
-        const isSolo = (product.type === 'Solo') || ((product.accountTypes || []).includes('Solo') && !(product.accountTypes || []).includes('Shared')) || ((product.name || '').toLowerCase().includes('solo'));
+        const pNameLow = (product.name || '').toLowerCase();
+        const isInvite = (product.type === 'Invite') || ((product.accountTypes || []).includes('Invite')) || pNameLow.includes('invite');
+        const isSolo = (product.type === 'Solo') || ((product.accountTypes || []).includes('Solo') && !(product.accountTypes || []).includes('Shared')) || pNameLow.includes('solo');
         const soloTypeRadio = document.querySelector('input[name="accountType"][value="Solo"]');
         const sharedTypeRadio = document.querySelector('input[name="accountType"][value="Shared"]');
-        if (isSolo && soloTypeRadio) soloTypeRadio.checked = true;
+        const inviteTypeRadio = document.querySelector('input[name="accountType"][value="Invite"]');
+        if (isInvite && inviteTypeRadio) inviteTypeRadio.checked = true;
+        else if (isSolo && soloTypeRadio) soloTypeRadio.checked = true;
         else if (sharedTypeRadio) sharedTypeRadio.checked = true;
       }
       displayProductDetails(productId);
@@ -3886,7 +3897,7 @@
       }
       const accIdLow = (accountId || '').toLowerCase();
       const existingSales = sales.filter(s => (s.accountId === accountId || (s.accountEmail && s.accountEmail.toLowerCase() === accIdLow)) && String(s.profileNumber) === String(profileNumber));
-      const maxSlots = profileType === 'Solo' ? 1 : 2;
+      const maxSlots = profileType === 'Shared' ? 2 : 1;
       const filled = existingSales.length;
       document.getElementById('profileStatusText').textContent = `${filled}/${maxSlots} slots filled`;
       disp.style.display = 'block';
@@ -4105,7 +4116,7 @@
       }).join('');
       tr.innerHTML = `
         <td><select class="select-control bulk-product" onchange="updateBulkRowDetails(${rowId})"><option value="">-- Select --</option>${opts}</select></td>
-        <td><select class="select-control bulk-account-type"><option value="Solo">Solo</option><option value="Shared">Shared</option></select></td>
+        <td><select class="select-control bulk-account-type"><option value="Solo">Solo</option><option value="Shared">Shared</option><option value="Invite">Invite</option></select></td>
         <td><select class="select-control bulk-warranty"><option value="FW">FW</option><option value="NW">NW</option></select></td>
         <td><input type="text" class="input-control bulk-username" placeholder="@buyer"></td>
         <td><input type="email" class="input-control bulk-email" placeholder="email@..."></td>
@@ -4311,10 +4322,13 @@
       const sell = Number(p.sellPrice ?? p.soloPrice ?? p.sharedPrice ?? p.fullPrice ?? 0);
       document.getElementById('editSubSellPrice').value = sell.toFixed(2);
 
-      const isSolo = getProductType(p) === 'Solo';
+      const pType = getProductType(p);
       const soloRadio = document.getElementById('editTypeSoloRadio');
       const sharedRadio = document.getElementById('editTypeSharedRadio');
-      if (isSolo && soloRadio) {
+      const inviteRadio = document.getElementById('editTypeInviteRadio');
+      if (pType === 'Invite' && inviteRadio) {
+        inviteRadio.checked = true;
+      } else if (pType === 'Solo' && soloRadio) {
         soloRadio.checked = true;
       } else if (sharedRadio) {
         sharedRadio.checked = true;
