@@ -1507,9 +1507,10 @@
             </div>
             <div class="header-controls">
               <select id="payoutPeriodSelect" class="select-control" onchange="setPayoutPeriod(this.value)">
-                <option value="all">All Time</option>
+                <option value="current" selected>Current Cycle (Since Last Salary)</option>
                 <option value="week">This Week</option>
                 <option value="month">This Month</option>
+                <option value="all">All Time</option>
               </select>
             </div>
           </div>
@@ -1517,8 +1518,9 @@
           <div id="salaryStatsGrid" class="stats-grid"></div>
 
           <div class="panel-card">
-            <div class="panel-title">
+            <div class="panel-title" style="display:flex; justify-content:space-between; align-items:center;">
               <span>Pending Payouts</span>
+              <button type="button" id="btnManualPayout" class="btn btn-sm btn-primary" onclick="openManualPayoutModal()" style="font-size:11px; padding:3px 10px; display:none;">+ Record Payout</button>
             </div>
             <div id="payoutListMain"></div>
           </div>
@@ -2205,14 +2207,18 @@
   <div id="markPaidModal" class="modal">
     <div class="modal-dialog">
       <div class="modal-header">
-        <h3 class="modal-title">Mark Payout as Paid</h3>
+        <h3 class="modal-title" id="markPaidModalTitle">Mark Payout as Paid</h3>
         <button type="button" class="modal-close-btn" onclick="closeMarkPaidModal()">✕</button>
       </div>
       <form id="markPaidForm" onsubmit="confirmMarkAsPaid(event)" class="form-grid">
         <input type="hidden" id="payoutToMarkId">
         <input type="hidden" id="payoutToMarkUserId">
+        <div class="form-field" id="payoutUserSelectGroup" style="display:none;">
+          <label>Select Admin</label>
+          <select id="payoutTargetAdminSelect" class="select-control"></select>
+        </div>
         <div class="form-field">
-          <label>Payout Amount (Editable for Bonus / Partial)</label>
+          <label id="payoutAmountLabel">Payout Amount (Editable for Bonus / Partial)</label>
           <input type="number" id="payoutToMarkAmount" class="input-control" step="0.01" min="0" required>
         </div>
         <div class="form-field">
@@ -2308,6 +2314,7 @@
       } else if (viewName === 'salary') {
         loadPayoutHistory();
         refreshPayoutViews();
+        updateSalaryStatsGrid();
       } else if (viewName === 'salary-rules') {
         updateSalarySimulator();
       } else if (viewName === 'accounts') {
@@ -2524,7 +2531,8 @@
     let realAdmins = [];
     let editingSale = null;
     let commissionBrackets = [];
-    let currentPayoutPeriod = 'all';
+    let currentPayoutPeriod = 'current';
+    let payoutHistoryList = [];
     const OWNER_SETTINGS_KEY = 'owner';
     let settings = { theme: 'dark', avatar: '' };
     let shopConfig = { shopName: 'SXO', currency: '₱', defaultRate: 20 };
@@ -2804,6 +2812,14 @@
           payouts.push({ id: p.id || child.key, ...p });
         });
         refreshPayoutViews();
+        updateSalaryStatsGrid();
+      });
+
+      // Payout History listener
+      getRef('payoutHistory').on('value', (snapshot) => {
+        const data = snapshot.val() || {};
+        payoutHistoryList = Object.values(data).sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+        updateSalaryStatsGrid();
       });
 
       // Accounts listener
@@ -3126,36 +3142,8 @@
         </div>
       `).join('');
 
-      // Also update Salary view summary cards
-      const salaryGrid = document.getElementById('salaryStatsGrid');
-      if (salaryGrid) {
-        salaryGrid.innerHTML = `
-          <div class="stat-card">
-            ${ICONS.dollar}
-            <p class="stat-label">Total Earned Salary</p>
-            <p class="stat-value">${formatCurrency(totalSalary)}</p>
-            <p class="stat-sub">Profit × Rate%</p>
-          </div>
-          <div class="stat-card">
-            ${ICONS.check}
-            <p class="stat-label">Verified Sales</p>
-            <p class="stat-value">${formatCurrency(officialSales)}</p>
-            <p class="stat-sub">Capital: ${formatCurrency(totalCapital)}</p>
-          </div>
-          <div class="stat-card">
-            ${ICONS.trend}
-            <p class="stat-label">Net Profit</p>
-            <p class="stat-value">${formatCurrency(totalProfit)}</p>
-            <p class="stat-sub">Sales – Capital</p>
-          </div>
-          <div class="stat-card">
-            ${ICONS.clock}
-            <p class="stat-label">Pending Payouts</p>
-            <p class="stat-value">${payouts.filter(p => p.status === 'pending').length}</p>
-            <p class="stat-sub">${totalQty} items sold</p>
-          </div>
-        `;
-      }
+      // Also update Salary view summary cards based on payout cycle
+      updateSalaryStatsGrid();
 
       renderRecentSales(filtered.slice(0, 6));
     }
@@ -5036,11 +5024,14 @@
       currentPayoutPeriod = period;
       autoCalculatePayouts();
       refreshPayoutViews();
+      updateSalaryStatsGrid();
     }
 
     function autoCalculatePayouts() {
-      if (!isOwner()) return;
-      const adminUsers = users.filter(u => (u.role || '').toLowerCase() === 'admin');
+      const adminUsers = isOwner()
+        ? users.filter(u => (u.role || '').toLowerCase() === 'admin')
+        : users.filter(u => String(u.id) === String(currentSession.id) || u.username === currentSession.username);
+
       adminUsers.forEach(user => {
         const uKey = sanitizeUserKey(user.username);
         const userSales = sales.filter(s => (String(s.userId) === String(user.id) || s.userKey === uKey) && s.sold);
@@ -5048,10 +5039,11 @@
         const paidTotal = payouts
           .filter(p => String(p.userId) === String(user.id) && p.status === 'paid')
           .reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
-        const outstanding = Math.max(totalCommission - paidTotal, 0);
+        const rawOutstanding = Math.max(totalCommission - paidTotal, 0);
+        const outstanding = Math.round(rawOutstanding * 100) / 100;
         const existingPending = payouts.find(p => String(p.userId) === String(user.id) && p.status === 'pending');
 
-        if (outstanding > 0) {
+        if (outstanding >= 0.01) {
           if (existingPending) {
             getRef('payouts/' + existingPending.id).update({ amount: outstanding });
           } else {
@@ -5068,6 +5060,105 @@
           getRef('payouts/' + existingPending.id).remove();
         }
       });
+    }
+
+    function updateSalaryStatsGrid() {
+      const salaryGrid = document.getElementById('salaryStatsGrid');
+      if (!salaryGrid) return;
+
+      const period = document.getElementById('payoutPeriodSelect')?.value || currentPayoutPeriod || 'current';
+
+      let targetSales = [];
+      if (isOwner()) {
+        targetSales = sales.filter(s => s.sold && (s.userRole || '').toLowerCase() !== 'owner');
+      } else {
+        const myKey = sanitizeUserKey(currentSession.username);
+        targetSales = sales.filter(s => (String(s.userId) === String(currentSession.id) || s.userKey === myKey) && s.sold);
+      }
+
+      if (period === 'current') {
+        if (!isOwner()) {
+          const userPayouts = (payoutHistoryList || []).filter(p => String(p.userId) === String(currentSession.id));
+          const lastPayout = userPayouts.length > 0 ? userPayouts[0] : null;
+          const lastTs = lastPayout ? (lastPayout.timestamp || new Date(lastPayout.paidDate).getTime() || 0) : 0;
+          targetSales = targetSales.filter(s => (s.timestamp || 0) > lastTs);
+        } else {
+          targetSales = targetSales.filter(s => {
+            const userPayouts = (payoutHistoryList || []).filter(p => String(p.userId) === String(s.userId));
+            const lastPayout = userPayouts.length > 0 ? userPayouts[0] : null;
+            const lastTs = lastPayout ? (lastPayout.timestamp || new Date(lastPayout.paidDate).getTime() || 0) : 0;
+            return (s.timestamp || 0) > lastTs;
+          });
+        }
+      } else if (period === 'week') {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const weekAgo = new Date(today);
+        weekAgo.setDate(today.getDate() - 7);
+        targetSales = targetSales.filter(s => new Date(s.date) >= weekAgo);
+      } else if (period === 'month') {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const monthAgo = new Date(today);
+        monthAgo.setMonth(today.getMonth() - 1);
+        targetSales = targetSales.filter(s => new Date(s.date) >= monthAgo);
+      }
+
+      let verifiedSales = 0;
+      let totalCapital = 0;
+      let totalProfit = 0;
+      let totalSalary = 0;
+      let totalQty = 0;
+
+      targetSales.forEach(s => {
+        const qty = parseInt(s.quantity) || 1;
+        const price = parseFloat(s.price) || 0;
+        const buy = parseFloat(s.buyPrice) || 0;
+        const tip = parseFloat(s.tip) || 0;
+        const rev = (price * qty) + tip;
+        const comm = (getEffectiveSaleUnitCommission(s, sales) * qty) + tip;
+
+        verifiedSales += rev;
+        totalCapital += buy * qty;
+        totalProfit += ((price - buy) * qty) + tip;
+        totalSalary += comm;
+        totalQty += qty;
+      });
+
+      let relevantPending = payouts.filter(p => p.status === 'pending');
+      if (!isOwner()) {
+        relevantPending = relevantPending.filter(p => String(p.userId) === String(currentSession.id));
+      }
+      const pendingTotal = relevantPending.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+
+      const periodLabel = period === 'current' ? 'Since Last Salary' : period === 'week' ? 'This Week' : period === 'month' ? 'This Month' : 'All Time';
+
+      salaryGrid.innerHTML = `
+        <div class="stat-card">
+          ${ICONS.dollar}
+          <p class="stat-label">Total Earned Salary</p>
+          <p class="stat-value">${formatCurrency(totalSalary)}</p>
+          <p class="stat-sub">${periodLabel}</p>
+        </div>
+        <div class="stat-card">
+          ${ICONS.check}
+          <p class="stat-label">Verified Sales</p>
+          <p class="stat-value">${formatCurrency(verifiedSales)}</p>
+          <p class="stat-sub">Capital: ${formatCurrency(totalCapital)}</p>
+        </div>
+        <div class="stat-card">
+          ${ICONS.trend}
+          <p class="stat-label">Net Profit</p>
+          <p class="stat-value">${formatCurrency(totalProfit)}</p>
+          <p class="stat-sub">Sales – Capital</p>
+        </div>
+        <div class="stat-card">
+          ${ICONS.clock}
+          <p class="stat-label">Pending Payouts</p>
+          <p class="stat-value">${formatCurrency(pendingTotal)}</p>
+          <p class="stat-sub">${totalQty} items in period</p>
+        </div>
+      `;
     }
 
     function refreshPayoutViews() {
@@ -5099,10 +5190,47 @@
       }).join('');
     }
 
+    function openManualPayoutModal() {
+      if (!isOwner()) return;
+      document.getElementById('payoutToMarkId').value = '';
+      const adminUsers = users.filter(u => (u.role || '').toLowerCase() === 'admin');
+      if (adminUsers.length === 0) {
+        showToast('No admin users found', 'error');
+        return;
+      }
+      const selectGroup = document.getElementById('payoutUserSelectGroup');
+      const select = document.getElementById('payoutTargetAdminSelect');
+      if (selectGroup && select) {
+        select.innerHTML = adminUsers.map(u => {
+          const name = (u.customName || u.username).replace(/^@/, '');
+          return `<option value="${u.id}">${name} (@${u.username})</option>`;
+        }).join('');
+        selectGroup.style.display = 'block';
+        document.getElementById('payoutToMarkUserId').value = select.value;
+        select.onchange = () => {
+          document.getElementById('payoutToMarkUserId').value = select.value;
+        };
+      }
+      document.getElementById('payoutToMarkAmount').value = '';
+      document.getElementById('paymentReference').value = '';
+      document.getElementById('paymentNotes').value = '';
+      const titleEl = document.getElementById('markPaidModalTitle');
+      if (titleEl) titleEl.textContent = 'Record Admin Payout';
+      const amtLbl = document.getElementById('payoutAmountLabel');
+      if (amtLbl) amtLbl.textContent = 'Payout Amount (₱)';
+      document.getElementById('markPaidModal').classList.add('show');
+    }
+
     function openMarkPaidModal(payoutId, userId, amount) {
       document.getElementById('payoutToMarkId').value = payoutId;
       document.getElementById('payoutToMarkUserId').value = userId;
       document.getElementById('payoutToMarkAmount').value = Number(amount).toFixed(2);
+      const selectGroup = document.getElementById('payoutUserSelectGroup');
+      if (selectGroup) selectGroup.style.display = 'none';
+      const titleEl = document.getElementById('markPaidModalTitle');
+      if (titleEl) titleEl.textContent = 'Mark Payout as Paid';
+      const amtLbl = document.getElementById('payoutAmountLabel');
+      if (amtLbl) amtLbl.textContent = 'Payout Amount (Editable for Bonus / Partial)';
       document.getElementById('markPaidModal').classList.add('show');
     }
     function closeMarkPaidModal() { document.getElementById('markPaidModal').classList.remove('show'); }
@@ -5124,7 +5252,11 @@
         id: historyId, userId, amount, method, reference, notes,
         period: currentPayoutPeriod, paidDate, timestamp: historyId
       }).then(() => {
-        return getRef('payouts/' + payoutId).update({ amount, status: 'paid', paidDate, method, reference });
+        if (payoutId) {
+          return getRef('payouts/' + payoutId).update({ amount, status: 'paid', paidDate, method, reference });
+        } else {
+          return getRef('payouts/' + historyId).set({ id: historyId, userId, amount, status: 'paid', paidDate, method, reference, date: paidDate });
+        }
       }).then(() => {
         closeMarkPaidModal();
         loadPayoutHistory();
@@ -5136,7 +5268,8 @@
     function loadPayoutHistory() {
       getRef('payoutHistory').once('value', (snap) => {
         const data = snap.val() || {};
-        let arr = Object.values(data).sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+        payoutHistoryList = Object.values(data).sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+        let arr = [...payoutHistoryList];
         if (!isOwner()) {
           arr = arr.filter(r => String(r.userId) === String(currentSession.id));
         }
@@ -5166,10 +5299,24 @@
     }
 
     function deletePayoutHistory(historyId) {
-      if (!isOwner() || !confirm('Delete this payout history record?')) return;
-      getRef('payoutHistory/' + historyId).remove().then(() => {
-        loadPayoutHistory();
-        showToast('Payout record deleted');
+      if (!isOwner() || !confirm('Delete this payout history record? The amount will return to Pending Payouts so you can re-record it.')) return;
+      showSyncingIndicator();
+      getRef('payoutHistory/' + historyId).once('value', (snap) => {
+        const histData = snap.val();
+        getRef('payoutHistory/' + historyId).remove().then(() => {
+          if (historyId) {
+            getRef('payouts/' + historyId).remove();
+          }
+          if (histData && histData.userId) {
+            const match = payouts.find(p => String(p.userId) === String(histData.userId) && p.status === 'paid' && Number(p.amount) === Number(histData.amount));
+            if (match) {
+              getRef('payouts/' + match.id).remove();
+            }
+          }
+          loadPayoutHistory();
+          autoCalculatePayouts();
+          showToast('Payout record deleted & returned to Pending');
+        });
       });
     }
 
