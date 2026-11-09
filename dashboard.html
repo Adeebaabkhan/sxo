@@ -1362,7 +1362,7 @@
             <select id="salesPeriodFilter" class="select-control">
               <option value="all">All Dates</option>
               <option value="today">Today</option>
-              <option value="week">This Week</option>
+              <option value="week">This Week (Sun - Sat)</option>
               <option value="month">This Month</option>
             </select>
           </div>
@@ -1508,7 +1508,7 @@
             <div class="header-controls">
               <select id="payoutPeriodSelect" class="select-control" onchange="setPayoutPeriod(this.value)">
                 <option value="current" selected>Current Cycle (Since Last Salary)</option>
-                <option value="week">This Week</option>
+                <option value="week">This Week (Sun - Sat)</option>
                 <option value="month">This Month</option>
                 <option value="all">All Time</option>
               </select>
@@ -2218,6 +2218,10 @@
           <select id="payoutTargetAdminSelect" class="select-control"></select>
         </div>
         <div class="form-field">
+          <label>Payout Date</label>
+          <input type="date" id="payoutPaidDate" class="input-control" required>
+        </div>
+        <div class="form-field">
           <label id="payoutAmountLabel">Payout Amount (Editable for Bonus / Partial)</label>
           <input type="number" id="payoutToMarkAmount" class="input-control" step="0.01" min="0" required>
         </div>
@@ -2238,7 +2242,54 @@
           <label>Notes</label>
           <input type="text" id="paymentNotes" class="input-control" placeholder="Optional notes">
         </div>
-        <button type="submit" class="btn btn-primary">Confirm Payout</button>
+        <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:10px;">
+          <button type="button" class="btn btn-outline" id="btnSavePendingOnly" onclick="savePendingAmountOnly()">Save Pending Amount</button>
+          <button type="submit" class="btn btn-primary" id="btnConfirmPayout">Confirm & Mark as Paid</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Edit Payout History Modal -->
+  <div id="editPayoutHistoryModal" class="modal">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 class="modal-title">Edit Payout Record</h3>
+        <button type="button" class="modal-close-btn" onclick="closeEditPayoutHistoryModal()">✕</button>
+      </div>
+      <form id="editPayoutHistoryForm" onsubmit="saveEditedPayoutHistory(event)" class="form-grid">
+        <input type="hidden" id="editHistoryId">
+        <input type="hidden" id="editHistoryUserId">
+        <div class="form-field">
+          <label>Admin</label>
+          <input type="text" id="editHistoryAdminName" class="input-control" readonly style="opacity:0.8;">
+        </div>
+        <div class="form-field">
+          <label>Payout Date</label>
+          <input type="date" id="editHistoryPaidDate" class="input-control" required>
+        </div>
+        <div class="form-field">
+          <label>Payout Amount (₱)</label>
+          <input type="number" id="editHistoryAmount" class="input-control" step="0.01" min="0" required>
+        </div>
+        <div class="form-field">
+          <label>Payment Method</label>
+          <select id="editHistoryMethod" class="select-control">
+            <option value="GCash">GCash</option>
+            <option value="Maya">Maya</option>
+            <option value="Bank Transfer">Bank Transfer</option>
+            <option value="Cash">Cash</option>
+          </select>
+        </div>
+        <div class="form-field">
+          <label>Reference Number</label>
+          <input type="text" id="editHistoryReference" class="input-control" placeholder="Optional ref #">
+        </div>
+        <div class="form-field">
+          <label>Notes</label>
+          <input type="text" id="editHistoryNotes" class="input-control" placeholder="Optional notes">
+        </div>
+        <button type="submit" class="btn btn-primary">Save Changes</button>
       </form>
     </div>
   </div>
@@ -3329,14 +3380,55 @@
     //   40% = 1600 and up sales
     //   sales - capital = profit
     //   profit * rate% = salary
+    function getPayWeekRange(d = new Date()) {
+      const date = (d instanceof Date) ? new Date(d) : new Date(d);
+      const day = date.getDay(); // 0 is Sunday, 6 is Saturday
+      const sunday = new Date(date);
+      sunday.setDate(date.getDate() - day);
+      sunday.setHours(0, 0, 0, 0);
+
+      const saturday = new Date(sunday);
+      saturday.setDate(sunday.getDate() + 6);
+      saturday.setHours(23, 59, 59, 999);
+
+      return { sunday, saturday };
+    }
+
+    function formatDateToYMD(d) {
+      if (!d) return '';
+      const date = (d instanceof Date) ? d : new Date(d);
+      if (isNaN(date.getTime())) return String(d);
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    }
+
     function getUserTotalVerifiedSales(targetUser, contextSales = sales) {
       if (!targetUser) return 0;
       const uKey = sanitizeUserKey(targetUser.username || targetUser.userKey || '');
       const uId = targetUser.id || targetUser.userId;
+
+      // Reset volume every week (Sunday to Saturday) or after last salary payout
+      const { sunday } = getPayWeekRange(new Date());
+      const sunStr = formatDateToYMD(sunday);
+      const userPayouts = (payoutHistoryList || []).filter(p => String(p.userId) === String(uId));
+      const lastPayout = userPayouts.length > 0 ? userPayouts[0] : null;
+      const lastTs = lastPayout ? (lastPayout.timestamp || (lastPayout.paidDate ? new Date(lastPayout.paidDate + 'T00:00:00').getTime() : 0)) : 0;
+
       return (contextSales || []).reduce((sum, s) => {
         if (!s.sold) return sum;
         const match = (uId && String(s.userId) === String(uId)) || (uKey && s.userKey === uKey);
         if (!match) return sum;
+
+        const sTs = s.timestamp || (s.date ? new Date(s.date + 'T00:00:00').getTime() : 0);
+        const sDate = s.date || (s.timestamp ? formatDateToYMD(new Date(s.timestamp)) : '');
+        if (lastPayout && lastTs > 0) {
+          if (sTs <= lastTs && sDate <= (lastPayout.paidDate || '')) return sum;
+        } else {
+          if (sDate < sunStr) return sum;
+        }
+
         return sum + ((parseFloat(s.price) || 0) * (parseInt(s.quantity) || 1)) + (parseFloat(s.tip) || 0);
       }, 0);
     }
@@ -5032,16 +5124,44 @@
         ? users.filter(u => (u.role || '').toLowerCase() === 'admin')
         : users.filter(u => String(u.id) === String(currentSession.id) || u.username === currentSession.username);
 
+      const { sunday } = getPayWeekRange(new Date());
+      const sunStr = formatDateToYMD(sunday);
+
       adminUsers.forEach(user => {
         const uKey = sanitizeUserKey(user.username);
-        const userSales = sales.filter(s => (String(s.userId) === String(user.id) || s.userKey === uKey) && s.sold);
-        const totalCommission = userSales.reduce((sum, s) => sum + (getEffectiveSaleUnitCommission(s, sales) * (parseInt(s.quantity) || 1)) + (parseFloat(s.tip) || 0), 0);
-        const paidTotal = payouts
-          .filter(p => String(p.userId) === String(user.id) && p.status === 'paid')
-          .reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
-        const rawOutstanding = Math.max(totalCommission - paidTotal, 0);
-        const outstanding = Math.round(rawOutstanding * 100) / 100;
         const existingPending = payouts.find(p => String(p.userId) === String(user.id) && p.status === 'pending');
+
+        // If pending payout was customized / adjusted by owner (e.g. 43.69), preserve it!
+        if (existingPending && (existingPending.isCustom || existingPending.manualAdjusted)) {
+          return;
+        }
+
+        const userPayouts = (payoutHistoryList || []).filter(p => String(p.userId) === String(user.id));
+        const lastPayout = userPayouts.length > 0 ? userPayouts[0] : null;
+        const lastTs = lastPayout ? (lastPayout.timestamp || (lastPayout.paidDate ? new Date(lastPayout.paidDate + 'T00:00:00').getTime() : 0)) : 0;
+
+        const cycleSales = sales.filter(s => {
+          if (!s.sold) return false;
+          const match = (String(s.userId) === String(user.id)) || (s.userKey === uKey);
+          if (!match) return false;
+          const sTs = s.timestamp || (s.date ? new Date(s.date + 'T00:00:00').getTime() : 0);
+          const sDate = s.date || (s.timestamp ? formatDateToYMD(new Date(s.timestamp)) : '');
+          if (lastPayout && lastTs > 0) {
+            return sTs > lastTs || (sDate > (lastPayout.paidDate || ''));
+          }
+          return sDate >= sunStr;
+        });
+
+        const cycleCommission = cycleSales.reduce((sum, s) => {
+          const qty = parseInt(s.quantity) || 1;
+          const tip = parseFloat(s.tip) || 0;
+          const unitComm = (s.customCommission !== undefined && s.customCommission !== null && s.customCommission !== '')
+            ? Number(s.customCommission)
+            : (Number(s.commission) || getEffectiveSaleUnitCommission(s, cycleSales));
+          return sum + (unitComm * qty) + tip;
+        }, 0);
+
+        const outstanding = Math.round(cycleCommission * 100) / 100;
 
         if (outstanding >= 0.01) {
           if (existingPending) {
@@ -5077,25 +5197,28 @@
       }
 
       if (period === 'current') {
-        if (!isOwner()) {
-          const userPayouts = (payoutHistoryList || []).filter(p => String(p.userId) === String(currentSession.id));
+        const { sunday } = getPayWeekRange(new Date());
+        const sunStr = formatDateToYMD(sunday);
+        targetSales = targetSales.filter(s => {
+          const sUid = String(s.userId || '');
+          const userPayouts = (payoutHistoryList || []).filter(p => String(p.userId) === sUid);
           const lastPayout = userPayouts.length > 0 ? userPayouts[0] : null;
-          const lastTs = lastPayout ? (lastPayout.timestamp || new Date(lastPayout.paidDate).getTime() || 0) : 0;
-          targetSales = targetSales.filter(s => (s.timestamp || 0) > lastTs);
-        } else {
-          targetSales = targetSales.filter(s => {
-            const userPayouts = (payoutHistoryList || []).filter(p => String(p.userId) === String(s.userId));
-            const lastPayout = userPayouts.length > 0 ? userPayouts[0] : null;
-            const lastTs = lastPayout ? (lastPayout.timestamp || new Date(lastPayout.paidDate).getTime() || 0) : 0;
-            return (s.timestamp || 0) > lastTs;
-          });
-        }
+          if (lastPayout) {
+            const lastTs = lastPayout.timestamp || (lastPayout.paidDate ? new Date(lastPayout.paidDate + 'T00:00:00').getTime() : 0);
+            const sTs = s.timestamp || (s.date ? new Date(s.date + 'T00:00:00').getTime() : 0);
+            return sTs > lastTs || (s.date && lastPayout.paidDate && s.date > lastPayout.paidDate);
+          }
+          const sDate = s.date || (s.timestamp ? formatDateToYMD(new Date(s.timestamp)) : '');
+          return sDate >= sunStr;
+        });
       } else if (period === 'week') {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const weekAgo = new Date(today);
-        weekAgo.setDate(today.getDate() - 7);
-        targetSales = targetSales.filter(s => new Date(s.date) >= weekAgo);
+        const { sunday, saturday } = getPayWeekRange(new Date());
+        const sunStr = formatDateToYMD(sunday);
+        const satStr = formatDateToYMD(saturday);
+        targetSales = targetSales.filter(s => {
+          const d = s.date || (s.timestamp ? formatDateToYMD(new Date(s.timestamp)) : '');
+          return d >= sunStr && d <= satStr;
+        });
       } else if (period === 'month') {
         const today = new Date();
         today.setHours(0, 0, 0, 0);
@@ -5116,7 +5239,10 @@
         const buy = parseFloat(s.buyPrice) || 0;
         const tip = parseFloat(s.tip) || 0;
         const rev = (price * qty) + tip;
-        const comm = (getEffectiveSaleUnitCommission(s, sales) * qty) + tip;
+        const unitComm = (s.customCommission !== undefined && s.customCommission !== null && s.customCommission !== '')
+          ? Number(s.customCommission)
+          : (Number(s.commission) || getEffectiveSaleUnitCommission(s, targetSales));
+        const comm = (unitComm * qty) + tip;
 
         verifiedSales += rev;
         totalCapital += buy * qty;
@@ -5131,7 +5257,7 @@
       }
       const pendingTotal = relevantPending.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
 
-      const periodLabel = period === 'current' ? 'Since Last Salary' : period === 'week' ? 'This Week' : period === 'month' ? 'This Month' : 'All Time';
+      const periodLabel = period === 'current' ? 'Since Last Salary' : period === 'week' ? 'This Week (Sun - Sat)' : period === 'month' ? 'This Month' : 'All Time';
 
       salaryGrid.innerHTML = `
         <div class="stat-card">
@@ -5211,6 +5337,8 @@
           document.getElementById('payoutToMarkUserId').value = select.value;
         };
       }
+      const dateEl = document.getElementById('payoutPaidDate');
+      if (dateEl) dateEl.value = new Date().toISOString().split('T')[0];
       document.getElementById('payoutToMarkAmount').value = '';
       document.getElementById('paymentReference').value = '';
       document.getElementById('paymentNotes').value = '';
@@ -5225,6 +5353,10 @@
       document.getElementById('payoutToMarkId').value = payoutId;
       document.getElementById('payoutToMarkUserId').value = userId;
       document.getElementById('payoutToMarkAmount').value = Number(amount).toFixed(2);
+      const targetPayout = payouts.find(p => String(p.id) === String(payoutId));
+      const defDate = targetPayout?.paidDate || targetPayout?.date || new Date().toISOString().split('T')[0];
+      const dateEl = document.getElementById('payoutPaidDate');
+      if (dateEl) dateEl.value = defDate;
       const selectGroup = document.getElementById('payoutUserSelectGroup');
       if (selectGroup) selectGroup.style.display = 'none';
       const titleEl = document.getElementById('markPaidModalTitle');
@@ -5233,7 +5365,47 @@
       if (amtLbl) amtLbl.textContent = 'Payout Amount (Editable for Bonus / Partial)';
       document.getElementById('markPaidModal').classList.add('show');
     }
-    function closeMarkPaidModal() { document.getElementById('markPaidModal').classList.remove('show'); }
+
+    function closeMarkPaidModal() {
+      document.getElementById('markPaidModal').classList.remove('show');
+    }
+
+    function savePendingAmountOnly() {
+      const payoutId = document.getElementById('payoutToMarkId').value;
+      const userId = document.getElementById('payoutToMarkUserId').value;
+      const amount = parseFloat(document.getElementById('payoutToMarkAmount').value);
+      if (isNaN(amount) || amount < 0) {
+        showToast('Please enter a valid amount', 'error');
+        return;
+      }
+      showSyncingIndicator();
+      if (payoutId) {
+        getRef('payouts/' + payoutId).update({ amount, isCustom: true, manualAdjusted: true }).then(() => {
+          closeMarkPaidModal();
+          autoCalculatePayouts();
+          refreshPayoutViews();
+          updateSalaryStatsGrid();
+          showToast('Pending payout updated to ' + formatCurrency(amount));
+        });
+      } else if (userId) {
+        const pid = Date.now();
+        getRef('payouts/' + pid).set({
+          id: pid,
+          userId,
+          amount,
+          status: 'pending',
+          date: new Date().toISOString().split('T')[0],
+          isCustom: true,
+          manualAdjusted: true
+        }).then(() => {
+          closeMarkPaidModal();
+          autoCalculatePayouts();
+          refreshPayoutViews();
+          updateSalaryStatsGrid();
+          showToast('Pending payout created: ' + formatCurrency(amount));
+        });
+      }
+    }
 
     function confirmMarkAsPaid(e) {
       e.preventDefault();
@@ -5243,25 +5415,94 @@
       const method = document.getElementById('paymentMethod').value;
       const reference = document.getElementById('paymentReference').value || 'N/A';
       const notes = document.getElementById('paymentNotes').value || 'N/A';
+      const paidDate = document.getElementById('payoutPaidDate')?.value || new Date().toISOString().split('T')[0];
 
       const historyId = Date.now();
-      const paidDate = new Date().toISOString().split('T')[0];
+      const histTimestamp = new Date(paidDate + 'T12:00:00').getTime() || historyId;
 
       showSyncingIndicator();
       getRef('payoutHistory/' + historyId).set({
         id: historyId, userId, amount, method, reference, notes,
-        period: currentPayoutPeriod, paidDate, timestamp: historyId
+        period: currentPayoutPeriod, paidDate, timestamp: histTimestamp
       }).then(() => {
         if (payoutId) {
-          return getRef('payouts/' + payoutId).update({ amount, status: 'paid', paidDate, method, reference });
+          return getRef('payouts/' + payoutId).update({ amount, status: 'paid', paidDate, method, reference, timestamp: histTimestamp });
         } else {
-          return getRef('payouts/' + historyId).set({ id: historyId, userId, amount, status: 'paid', paidDate, method, reference, date: paidDate });
+          return getRef('payouts/' + historyId).set({ id: historyId, userId, amount, status: 'paid', paidDate, method, reference, date: paidDate, timestamp: histTimestamp });
         }
       }).then(() => {
         closeMarkPaidModal();
         loadPayoutHistory();
         autoCalculatePayouts();
         showToast('Payout recorded!');
+      });
+    }
+
+    function openEditPayoutHistoryModal(historyId) {
+      if (!isOwner()) return;
+      const rec = (payoutHistoryList || []).find(r => String(r.id) === String(historyId));
+      if (!rec) {
+        showToast('Payout record not found', 'error');
+        return;
+      }
+      const u = users.find(x => String(x.id) === String(rec.userId));
+      const name = u ? (u.customName || u.username).replace(/^@/, '') : 'Admin';
+
+      document.getElementById('editHistoryId').value = rec.id;
+      document.getElementById('editHistoryUserId').value = rec.userId || '';
+      document.getElementById('editHistoryAdminName').value = `${name} (@${u ? u.username : 'admin'})`;
+      document.getElementById('editHistoryPaidDate').value = rec.paidDate || new Date().toISOString().split('T')[0];
+      document.getElementById('editHistoryAmount').value = Number(rec.amount || 0).toFixed(2);
+      document.getElementById('editHistoryMethod').value = rec.method || 'GCash';
+      document.getElementById('editHistoryReference').value = (rec.reference === 'N/A' ? '' : rec.reference) || '';
+      document.getElementById('editHistoryNotes').value = (rec.notes === 'N/A' ? '' : rec.notes) || '';
+
+      document.getElementById('editPayoutHistoryModal').classList.add('show');
+    }
+
+    function closeEditPayoutHistoryModal() {
+      document.getElementById('editPayoutHistoryModal').classList.remove('show');
+    }
+
+    function saveEditedPayoutHistory(e) {
+      e.preventDefault();
+      if (!isOwner()) return;
+      const historyId = document.getElementById('editHistoryId').value;
+      const userId = document.getElementById('editHistoryUserId').value;
+      const paidDate = document.getElementById('editHistoryPaidDate').value;
+      const amount = parseFloat(document.getElementById('editHistoryAmount').value) || 0;
+      const method = document.getElementById('editHistoryMethod').value;
+      const reference = document.getElementById('editHistoryReference').value.trim() || 'N/A';
+      const notes = document.getElementById('editHistoryNotes').value.trim() || 'N/A';
+      const histTimestamp = new Date(paidDate + 'T12:00:00').getTime() || Date.now();
+
+      showSyncingIndicator();
+      getRef('payoutHistory/' + historyId).update({
+        paidDate,
+        amount,
+        method,
+        reference,
+        notes,
+        timestamp: histTimestamp
+      }).then(() => {
+        if (historyId) {
+          getRef('payouts/' + historyId).once('value', (s) => {
+            if (s.exists()) {
+              getRef('payouts/' + historyId).update({ paidDate, amount, method, reference, timestamp: histTimestamp });
+            } else if (userId) {
+              const match = payouts.find(p => String(p.userId) === String(userId) && p.status === 'paid');
+              if (match) {
+                getRef('payouts/' + match.id).update({ paidDate, amount, method, reference, timestamp: histTimestamp });
+              }
+            }
+          });
+        }
+        closeEditPayoutHistoryModal();
+        loadPayoutHistory();
+        autoCalculatePayouts();
+        showToast('Payout record updated!');
+      }).catch(err => {
+        showToast('Error: ' + err.message, 'error');
       });
     }
 
@@ -5291,7 +5532,12 @@
               <td>${r.method || '-'}</td>
               <td>${r.reference || '-'}</td>
               <td>${r.notes || '-'}</td>
-              ${isOwner() ? `<td><button class="btn btn-sm btn-danger" onclick="deletePayoutHistory('${r.id}')">✕</button></td>` : ''}
+              ${isOwner() ? `
+                <td style="white-space:nowrap;">
+                  <button class="btn btn-sm btn-outline" style="margin-right:4px;" onclick="openEditPayoutHistoryModal('${r.id}')">Edit</button>
+                  <button class="btn btn-sm btn-danger" onclick="deletePayoutHistory('${r.id}')">✕</button>
+                </td>
+              ` : ''}
             </tr>
           `;
         }).join('');
