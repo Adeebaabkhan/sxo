@@ -1518,9 +1518,12 @@
           <div id="salaryStatsGrid" class="stats-grid"></div>
 
           <div class="panel-card">
-            <div class="panel-title" style="display:flex; justify-content:space-between; align-items:center;">
+            <div class="panel-title" style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
               <span>Pending Payouts</span>
-              <button type="button" id="btnManualPayout" class="btn btn-sm btn-primary" onclick="openManualPayoutModal()" style="font-size:11px; padding:3px 10px; display:none;">+ Record Payout</button>
+              <div style="display:flex; align-items:center; gap:6px;">
+                <button type="button" id="btnRecalcPayouts" class="btn btn-sm btn-outline" onclick="recalculateAllSalesCommissions()" style="font-size:11px; padding:3px 10px; display:none;" title="Recalculate commissions and sync pending payouts">↻ Recalculate</button>
+                <button type="button" id="btnManualPayout" class="btn btn-sm btn-primary" onclick="openManualPayoutModal()" style="font-size:11px; padding:3px 10px; display:none;">+ Record Payout</button>
+              </div>
             </div>
             <div id="payoutListMain"></div>
           </div>
@@ -2718,6 +2721,10 @@
         document.getElementById('ownerProductActions').style.display = 'flex';
         document.getElementById('ownerShopSettingsCard').style.display = 'block';
         document.getElementById('ownerSaleOverrides').style.display = 'grid';
+        const manualPayoutBtn = document.getElementById('btnManualPayout');
+        if (manualPayoutBtn) manualPayoutBtn.style.display = 'inline-flex';
+        const recalcPayoutsBtn = document.getElementById('btnRecalcPayouts');
+        if (recalcPayoutsBtn) recalcPayoutsBtn.style.display = 'inline-flex';
       } else {
         document.getElementById('navLabelDashboard').textContent = 'My Dashboard';
         document.getElementById('navLabelSales').textContent = 'My Sales';
@@ -2733,6 +2740,10 @@
         document.getElementById('ownerProductActions').style.display = 'none';
         document.getElementById('ownerShopSettingsCard').style.display = 'none';
         document.getElementById('ownerSaleOverrides').style.display = 'none';
+        const manualPayoutBtn = document.getElementById('btnManualPayout');
+        if (manualPayoutBtn) manualPayoutBtn.style.display = 'none';
+        const recalcPayoutsBtn = document.getElementById('btnRecalcPayouts');
+        if (recalcPayoutsBtn) recalcPayoutsBtn.style.display = 'none';
         document.querySelectorAll('.owner-col').forEach(el => el.style.display = 'none');
       }
 
@@ -2741,6 +2752,28 @@
     }
 
     // =================== LOAD DATA FROM FIREBASE ===================
+    const dataReady = {
+      users: false,
+      sales: false,
+      payouts: false,
+      payoutHistory: false,
+      brackets: false
+    };
+    let autoCalcTimer = null;
+
+    function isAllCoreDataReady() {
+      return dataReady.users && dataReady.sales && dataReady.payouts && dataReady.payoutHistory && dataReady.brackets;
+    }
+
+    function scheduleAutoCalculatePayouts(options = {}) {
+      if (!isAllCoreDataReady()) return;
+      if (autoCalcTimer) clearTimeout(autoCalcTimer);
+      autoCalcTimer = setTimeout(() => {
+        autoCalcTimer = null;
+        autoCalculatePayouts(options);
+      }, 150);
+    }
+
     function loadAllData() {
       // Shop config listener
       getRef('settings/' + OWNER_SETTINGS_KEY + '/shopConfig').on('value', (snap) => {
@@ -2773,6 +2806,8 @@
           currentSession.profitPercent = me.profitPercent ?? 20;
         }
 
+        dataReady.users = true;
+
         if (isOwner()) {
           const userFilter = document.getElementById('userFilter');
           const currentVal = userFilter.value || 'all';
@@ -2788,6 +2823,11 @@
 
         populateSoldByDropdown();
         loadAllSalesData();
+        if (sales.length > 0) {
+          updateUI();
+          renderPayoutHistoryTable();
+          scheduleAutoCalculatePayouts();
+        }
       });
 
       // Products listener
@@ -2857,20 +2897,28 @@
 
       // Payouts listener
       getRef('payouts').on('value', (snapshot) => {
+        const wasReady = dataReady.payouts;
         payouts = [];
         snapshot.forEach(child => {
           const p = child.val() || {};
           payouts.push({ id: p.id || child.key, ...p });
         });
+        dataReady.payouts = true;
         refreshPayoutViews();
         updateSalaryStatsGrid();
+        if (!wasReady) {
+          scheduleAutoCalculatePayouts();
+        }
       });
 
       // Payout History listener
       getRef('payoutHistory').on('value', (snapshot) => {
         const data = snapshot.val() || {};
-        payoutHistoryList = Object.values(data).sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-        updateSalaryStatsGrid();
+        payoutHistoryList = Object.values(data).sort((a, b) => (getPayoutCutoffTimestamp(b) || 0) - (getPayoutCutoffTimestamp(a) || 0));
+        dataReady.payoutHistory = true;
+        renderPayoutHistoryTable();
+        updateUI();
+        scheduleAutoCalculatePayouts();
       });
 
       // Accounts listener
@@ -2878,7 +2926,7 @@
         const accData = snapshot.val() || {};
         accounts = Object.values(accData);
         renderInventoryDashboard();
-        updateStats();
+        calculateStats();
       });
 
       // User settings listener
@@ -2929,8 +2977,10 @@
           });
           sales.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
           allSalesForTracking = sales;
+          dataReady.sales = true;
           updateUI();
           updateNotifications();
+          scheduleAutoCalculatePayouts();
         });
       } else {
         const userKey = sanitizeUserKey(currentSession.username);
@@ -2950,8 +3000,10 @@
           if (!allSalesForTracking || allSalesForTracking.length === 0) {
             allSalesForTracking = sales;
           }
+          dataReady.sales = true;
           updateUI();
           updateNotifications();
+          scheduleAutoCalculatePayouts();
         });
 
         // Also listen to all sales for inventory tracking across admins
@@ -3003,7 +3055,7 @@
       
       const hasBuyPrice = sale.buyPrice !== undefined && sale.buyPrice !== null && sale.buyPrice !== '' && !isNaN(sale.buyPrice);
       let buyPrice = hasBuyPrice ? Number(sale.buyPrice) : NaN;
-      if (isNaN(buyPrice) || buyPrice === 0) {
+      if (isNaN(buyPrice)) {
         const prod = findProductById(sale.productId) || getAllSubscriptionProducts().find(p => (p.name || '').toLowerCase() === (sale.productName || '').toLowerCase());
         buyPrice = prod ? Number(prod.buyPrice ?? prod.capital ?? 0) : 0;
       }
@@ -3034,7 +3086,7 @@
     function getFilteredSales(ignoreUserFilter = false, customPeriod = null) {
       const activePeriod = customPeriod || document.getElementById('periodSelect').value || 'all';
       const today = new Date();
-      today.setHours(0, 0, 0, 0);
+      const todayStr = formatDateToYMD(today);
 
       let filtered = [...sales];
 
@@ -3042,28 +3094,33 @@
         if (!ignoreUserFilter) {
           const selectedUserId = document.getElementById('userFilter').value;
           if (selectedUserId && selectedUserId !== 'all') {
-            filtered = filtered.filter(s => String(s.userId) === String(selectedUserId));
+            const targetU = users.find(u => String(u.id) === String(selectedUserId));
+            filtered = filtered.filter(s =>
+              targetU ? doesSaleBelongToUser(s, targetU) : String(s.userId) === String(selectedUserId)
+            );
           }
         }
       } else {
-        const myKey = sanitizeUserKey(currentSession.username);
-        filtered = filtered.filter(s => String(s.userId) === String(currentSession.id) || s.userKey === myKey);
+        filtered = filtered.filter(s => doesSaleBelongToUser(s, currentSession));
       }
 
       if (activePeriod === 'today') {
-        filtered = filtered.filter(s => {
-          const d = new Date(s.date);
-          d.setHours(0, 0, 0, 0);
-          return d.getTime() === today.getTime();
-        });
+        filtered = filtered.filter(s => getSaleDateYMD(s) === todayStr);
       } else if (activePeriod === 'week') {
-        const weekAgo = new Date(today);
-        weekAgo.setDate(today.getDate() - 7);
-        filtered = filtered.filter(s => new Date(s.date) >= weekAgo);
+        const { sunday, saturday } = getPayWeekRange(today);
+        const sunStr = formatDateToYMD(sunday);
+        const satStr = formatDateToYMD(saturday);
+        filtered = filtered.filter(s => {
+          const d = getSaleDateYMD(s);
+          return d >= sunStr && d <= satStr;
+        });
       } else if (activePeriod === 'month') {
-        const monthAgo = new Date(today);
-        monthAgo.setMonth(today.getMonth() - 1);
-        filtered = filtered.filter(s => new Date(s.date) >= monthAgo);
+        const monthStartStr = formatDateToYMD(new Date(today.getFullYear(), today.getMonth(), 1));
+        const monthEndStr = formatDateToYMD(new Date(today.getFullYear(), today.getMonth() + 1, 0));
+        filtered = filtered.filter(s => {
+          const d = getSaleDateYMD(s);
+          return d >= monthStartStr && d <= monthEndStr;
+        });
       }
 
       return filtered;
@@ -3103,7 +3160,7 @@
         const buy = parseFloat(s.buyPrice) || 0;
         const tip = parseFloat(s.tip) || 0;
         const rev = (price * qty) + tip;
-        const unitComm = getEffectiveSaleUnitCommission(s, filtered);
+        const unitComm = getEffectiveSaleUnitCommission(s, sales);
         const comm = (unitComm * qty) + tip;
 
         submittedSales += rev;
@@ -3115,7 +3172,7 @@
           officialCount += 1;
           totalCapital += buy * qty;
           totalProfit += ((price - buy) * qty) + tip;
-          if ((s.userRole || '').toLowerCase() !== 'owner') {
+          if (!isOwnerSale(s)) {
             totalSalary += comm;
           }
         } else {
@@ -3126,19 +3183,22 @@
       const ownerEarnings = totalProfit - totalSalary;
       const avgSaleValue = officialCount > 0 ? officialSales / officialCount : 0;
 
-      // Today & This Week stats
-      const todayStr = new Date().toISOString().split('T')[0];
-      const weekAgo = new Date();
-      weekAgo.setDate(weekAgo.getDate() - 7);
+      // Today & This Week (Sun - Sat) verified stats
+      const todayStr = formatDateToYMD(new Date());
+      const { sunday, saturday } = getPayWeekRange(new Date());
+      const weekSunStr = formatDateToYMD(sunday);
+      const weekSatStr = formatDateToYMD(saturday);
 
       let todayAmount = 0, todayCount = 0, weekAmount = 0, weekCount = 0;
       allUserScoped.forEach(s => {
+        if (!s.sold) return;
         const rev = ((parseFloat(s.price) || 0) * (parseInt(s.quantity) || 1)) + (parseFloat(s.tip) || 0);
-        if (s.date === todayStr) {
+        const sDate = getSaleDateYMD(s);
+        if (sDate === todayStr) {
           todayAmount += rev;
           todayCount += 1;
         }
-        if (new Date(s.date) >= weekAgo) {
+        if (sDate >= weekSunStr && sDate <= weekSatStr) {
           weekAmount += rev;
           weekCount += 1;
         }
@@ -3153,14 +3213,19 @@
         }
       });
 
-      const myRate = !isOwner() ? getCommissionRateForProfit(officialSales, currentSession?.id) : 100;
+      const myRateSummary = !isOwner() ? getCycleRateSummary(currentSession, filtered.filter(s => s.sold)) : null;
+      const mySalarySub = !isOwner()
+        ? (myRateSummary.singleRate !== null && myRateSummary.singleRate !== undefined
+            ? `${myRateSummary.singleRate}% of ${formatCurrency(totalProfit)} profit`
+            : `${myRateSummary.badgeText} • ${formatCurrency(totalProfit)} profit`)
+        : '';
 
       const cards = isOwner()
         ? [
             { label: 'Official Sales', value: formatCurrency(officialSales), sub: `${officialCount} verified`, icon: ICONS.check },
             { label: 'Official Profit', value: formatCurrency(totalProfit), sub: 'Sales – Capital', icon: ICONS.trend },
             { label: 'Owner Earnings', value: formatCurrency(ownerEarnings), sub: 'Net after salary', icon: ICONS.dollar },
-            { label: 'Admin Salary', value: formatCurrency(totalSalary), sub: `${users.filter(u => u.role === 'admin').length} admins`, icon: ICONS.users },
+            { label: 'Admin Salary', value: formatCurrency(totalSalary), sub: `${users.filter(u => (u.role || '').toLowerCase() === 'admin').length} admins`, icon: ICONS.users },
             { label: 'Total Capital', value: formatCurrency(totalCapital), sub: 'Product cost', icon: ICONS.box },
             { label: 'Qty Sold', value: String(totalQty), sub: `${filtered.length} transactions`, icon: ICONS.chart },
             { label: 'Avg Sale Value', value: formatCurrency(avgSaleValue), sub: 'Per order', icon: ICONS.target },
@@ -3174,7 +3239,7 @@
             { label: 'My Sales', value: formatCurrency(submittedSales), sub: `${filtered.length} entries`, icon: ICONS.cart },
             { label: 'Total Capital', value: formatCurrency(totalCapital), sub: 'Product / Slot cost', icon: ICONS.box },
             { label: 'Net Profit', value: formatCurrency(totalProfit), sub: 'Sales – Capital', icon: ICONS.trend },
-            { label: 'My Salary', value: formatCurrency(totalSalary), sub: `${myRate}% of ${formatCurrency(totalProfit)} profit`, icon: ICONS.dollar },
+            { label: 'My Salary', value: formatCurrency(totalSalary), sub: mySalarySub, icon: ICONS.dollar },
             { label: 'Qty Sold', value: String(totalQty), sub: `${filtered.length} orders`, icon: ICONS.chart },
             { label: 'Pending', value: String(pendingCount), sub: '0 rejected', icon: ICONS.clock },
             { label: 'Avg Sale Value', value: formatCurrency(avgSaleValue), sub: 'Per order', icon: ICONS.target },
@@ -3239,8 +3304,7 @@
       }
       const periodSales = getFilteredSales(true);
       container.innerHTML = adminUsers.map(user => {
-        const uKey = sanitizeUserKey(user.username);
-        const userSales = periodSales.filter(s => (String(s.userId) === String(user.id) || s.userKey === uKey) && s.sold);
+        const userSales = periodSales.filter(s => doesSaleBelongToUser(s, user) && s.sold);
         const totals = userSales.reduce((acc, s) => {
           const qty = parseInt(s.quantity) || 1;
           const price = parseFloat(s.price) || 0;
@@ -3249,18 +3313,18 @@
           acc.sales += (price * qty) + tip;
           acc.capital += buy * qty;
           acc.profit += ((price - buy) * qty) + tip;
-          acc.salary += (getEffectiveSaleUnitCommission(s, periodSales) * qty) + tip;
+          acc.salary += (getEffectiveSaleUnitCommission(s, sales) * qty) + tip;
           acc.items += qty;
           return acc;
         }, { sales: 0, capital: 0, profit: 0, salary: 0, items: 0 });
-        const tierRate = getCommissionRateForProfit(totals.sales, user.id);
+        const rateSummary = getCycleRateSummary(user, userSales);
         const name = (user.customName || user.username).replace(/^@/, '');
         return `
           <div class="item-card">
             <div class="item-card-header">
               <div>
                 <div class="item-card-title">${name}</div>
-                <div class="item-card-sub">@${user.username.replace(/^@/, '')} • ${tierRate}% rate</div>
+                <div class="item-card-sub">@${user.username.replace(/^@/, '')} • ${rateSummary.badgeText}</div>
               </div>
               <span class="badge badge-primary">${totals.items} sold</span>
             </div>
@@ -3278,7 +3342,7 @@
                 <div class="metric-mini-val" style="color:var(--success);">${formatCurrency(totals.profit)}</div>
               </div>
               <div>
-                <div class="metric-mini-label">Salary (${tierRate}%)</div>
+                <div class="metric-mini-label">${rateSummary.salaryLabel}</div>
                 <div class="metric-mini-val" style="color:var(--primary);">${formatCurrency(totals.salary)}</div>
               </div>
             </div>
@@ -3380,23 +3444,24 @@
     //   40% = 1600 and up sales
     //   sales - capital = profit
     //   profit * rate% = salary
-    function getPayWeekRange(d = new Date()) {
-      const date = (d instanceof Date) ? new Date(d) : new Date(d);
-      const day = date.getDay(); // 0 is Sunday, 6 is Saturday
-      const sunday = new Date(date);
-      sunday.setDate(date.getDate() - day);
-      sunday.setHours(0, 0, 0, 0);
-
-      const saturday = new Date(sunday);
-      saturday.setDate(sunday.getDate() + 6);
-      saturday.setHours(23, 59, 59, 999);
-
-      return { sunday, saturday };
+    function parseLocalYMD(dateStr) {
+      if (!dateStr) return null;
+      const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(dateStr).trim());
+      if (m) {
+        return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 0, 0, 0, 0);
+      }
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return null;
+      d.setHours(0, 0, 0, 0);
+      return d;
     }
 
     function formatDateToYMD(d) {
       if (!d) return '';
-      const date = (d instanceof Date) ? d : new Date(d);
+      if (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d.trim())) {
+        return d.trim();
+      }
+      const date = (d instanceof Date) ? d : (parseLocalYMD(d) || new Date(d));
       if (isNaN(date.getTime())) return String(d);
       const year = date.getFullYear();
       const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -3404,33 +3469,253 @@
       return `${year}-${month}-${day}`;
     }
 
-    function getUserTotalVerifiedSales(targetUser, contextSales = sales) {
-      if (!targetUser) return 0;
-      const uKey = sanitizeUserKey(targetUser.username || targetUser.userKey || '');
-      const uId = targetUser.id || targetUser.userId;
+    function formatDateInTimeZone(dateObj, tz = 'Asia/Manila') {
+      try {
+        if (!(dateObj instanceof Date) || isNaN(dateObj.getTime())) return '';
+        const parts = new Intl.DateTimeFormat('en-US', {
+          timeZone: tz,
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit'
+        }).formatToParts(dateObj);
+        const y = parts.find(p => p.type === 'year')?.value;
+        const m = parts.find(p => p.type === 'month')?.value;
+        const d = parts.find(p => p.type === 'day')?.value;
+        return (y && m && d) ? `${y}-${m}-${d}` : '';
+      } catch (e) {
+        return '';
+      }
+    }
 
-      // Reset volume every week (Sunday to Saturday) or after last salary payout
-      const { sunday } = getPayWeekRange(new Date());
-      const sunStr = formatDateToYMD(sunday);
-      const userPayouts = (payoutHistoryList || []).filter(p => String(p.userId) === String(uId));
-      const lastPayout = userPayouts.length > 0 ? userPayouts[0] : null;
-      const lastTs = lastPayout ? (lastPayout.timestamp || (lastPayout.paidDate ? new Date(lastPayout.paidDate + 'T00:00:00').getTime() : 0)) : 0;
+    function getSaleDateYMD(sale) {
+      if (!sale) return '';
+      if (sale.date && /^\d{4}-\d{2}-\d{2}$/.test(String(sale.date).trim())) {
+        return String(sale.date).trim();
+      }
+      if (sale.date) {
+        const ymd = formatDateToYMD(sale.date);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return ymd;
+      }
+      if (sale.timestamp) {
+        return formatDateToYMD(new Date(Number(sale.timestamp)));
+      }
+      return '';
+    }
+
+    function getPayWeekRange(d = new Date()) {
+      const date = (typeof d === 'string')
+        ? (parseLocalYMD(d) || new Date(d))
+        : ((d instanceof Date) ? new Date(d) : new Date(d));
+      if (isNaN(date.getTime())) {
+        return getPayWeekRange(new Date());
+      }
+      const day = date.getDay(); // 0 is Sunday, 6 is Saturday
+      const sunday = new Date(date.getFullYear(), date.getMonth(), date.getDate() - day, 0, 0, 0, 0);
+      const saturday = new Date(sunday.getFullYear(), sunday.getMonth(), sunday.getDate() + 6, 23, 59, 59, 999);
+      return { sunday, saturday };
+    }
+
+    function getPayWeekKey(d = new Date()) {
+      return formatDateToYMD(getPayWeekRange(d).sunday);
+    }
+
+    function getPayWeekLabel(weekKey) {
+      if (!weekKey) return 'Unknown Week';
+      const sun = parseLocalYMD(weekKey);
+      if (!sun) return weekKey;
+      const sat = new Date(sun.getFullYear(), sun.getMonth(), sun.getDate() + 6);
+      const fmt = { month: 'short', day: 'numeric' };
+      return `${sun.toLocaleDateString('en-US', fmt)} – ${sat.toLocaleDateString('en-US', fmt)}`;
+    }
+
+    function findMatchedUserForSale(sale) {
+      if (!sale) return null;
+      const uKey = sale.userKey || sanitizeUserKey(sale.soldBy || sale.userName || '');
+      return users.find(u =>
+        (sale.userId !== undefined && sale.userId !== null && String(u.id) === String(sale.userId)) ||
+        (uKey && sanitizeUserKey(u.username) === uKey)
+      ) || null;
+    }
+
+    function isOwnerSale(sale) {
+      if (!sale) return false;
+      const matchedUser = findMatchedUserForSale(sale);
+      if (matchedUser) return (matchedUser.role || '').toLowerCase() === 'owner';
+      return (sale.userRole || '').toLowerCase() === 'owner';
+    }
+
+    function doesSaleBelongToUser(sale, targetUser) {
+      if (!sale || !targetUser) return false;
+      const uId = targetUser.id !== undefined ? targetUser.id : targetUser.userId;
+      const uKey = sanitizeUserKey(targetUser.username || targetUser.userKey || '');
+      return (uId !== undefined && uId !== null && String(sale.userId) === String(uId)) ||
+             (uKey && sale.userKey === uKey);
+    }
+
+    function getPayoutCutoffTimestamp(payoutRec) {
+      if (!payoutRec) return 0;
+      const ts = Number(payoutRec.timestamp) || 0;
+      const pd = payoutRec.paidDate || '';
+      if (pd) {
+        if (ts > 0) {
+          const tsDateObj = new Date(ts);
+          if (formatDateToYMD(tsDateObj) === pd || formatDateInTimeZone(tsDateObj, 'Asia/Manila') === pd) {
+            return ts;
+          }
+        }
+        const parsedEnd = parseLocalYMD(pd);
+        if (parsedEnd) {
+          parsedEnd.setHours(23, 59, 59, 999);
+          return parsedEnd.getTime();
+        }
+      }
+      return ts;
+    }
+
+    function getSortedUserPayouts(targetUser, ascending = false) {
+      if (!targetUser) return [];
+      const uId = targetUser.id !== undefined ? targetUser.id : targetUser.userId;
+      const uKey = sanitizeUserKey(targetUser.username || targetUser.userKey || '');
+      const list = (payoutHistoryList || []).filter(p => {
+        if (!p) return false;
+        if (uId !== undefined && uId !== null && String(p.userId) === String(uId)) return true;
+        if (p.userKey && uKey && sanitizeUserKey(p.userKey) === uKey) return true;
+        return false;
+      });
+      list.sort((a, b) => {
+        const diff = getPayoutCutoffTimestamp(a) - getPayoutCutoffTimestamp(b);
+        return ascending ? diff : -diff;
+      });
+      return list;
+    }
+
+    function getLastUserPayout(targetUser) {
+      const sortedDesc = getSortedUserPayouts(targetUser, false);
+      return sortedDesc.length > 0 ? sortedDesc[0] : null;
+    }
+
+    function isSaleAfterPayout(sale, payoutRec) {
+      if (!payoutRec) return true;
+      const sDate = getSaleDateYMD(sale);
+      const pDate = payoutRec.paidDate || '';
+      if (pDate && sDate) {
+        if (sDate > pDate) return true;
+        if (sDate < pDate) return false;
+      }
+      const cutoffTs = getPayoutCutoffTimestamp(payoutRec);
+      const sDateParsed = sDate ? parseLocalYMD(sDate) : null;
+      const sTs = Number(sale.timestamp) || (sDateParsed ? sDateParsed.getTime() : 0);
+      return sTs > cutoffTs;
+    }
+
+    function getSaleCycleInfo(sale, targetUser = null) {
+      const u = targetUser || findMatchedUserForSale(sale) || {
+        id: sale?.userId,
+        username: sale?.soldBy || sale?.userName,
+        userKey: sale?.userKey,
+        role: sale?.userRole || 'admin',
+        commissionMode: 'bracket'
+      };
+      const sortedAsc = getSortedUserPayouts(u, true);
+      let payoutSegIdx = 0;
+      for (let i = 0; i < sortedAsc.length; i++) {
+        if (isSaleAfterPayout(sale, sortedAsc[i])) {
+          payoutSegIdx++;
+        } else {
+          break;
+        }
+      }
+      const sDate = getSaleDateYMD(sale);
+      const weekKey = sDate ? getPayWeekKey(sDate) : getPayWeekKey(new Date());
+      return {
+        user: u,
+        payoutSegIdx,
+        isUnpaid: payoutSegIdx === sortedAsc.length,
+        weekKey,
+        cycleKey: `${payoutSegIdx}|${weekKey}`
+      };
+    }
+
+    function getCycleSalesVolume(targetUser, weekKey, payoutSegIdx = null, contextSales = sales) {
+      if (!targetUser) return 0;
+      const sortedAsc = getSortedUserPayouts(targetUser, true);
+      const targetSegIdx = payoutSegIdx !== null ? payoutSegIdx : sortedAsc.length;
+      const targetWeekKey = weekKey || getPayWeekKey(new Date());
 
       return (contextSales || []).reduce((sum, s) => {
-        if (!s.sold) return sum;
-        const match = (uId && String(s.userId) === String(uId)) || (uKey && s.userKey === uKey);
-        if (!match) return sum;
-
-        const sTs = s.timestamp || (s.date ? new Date(s.date + 'T00:00:00').getTime() : 0);
-        const sDate = s.date || (s.timestamp ? formatDateToYMD(new Date(s.timestamp)) : '');
-        if (lastPayout && lastTs > 0) {
-          if (sTs <= lastTs && sDate <= (lastPayout.paidDate || '')) return sum;
-        } else {
-          if (sDate < sunStr) return sum;
-        }
-
+        if (!s || !s.sold) return sum;
+        if (!doesSaleBelongToUser(s, targetUser)) return sum;
+        const info = getSaleCycleInfo(s, targetUser);
+        if (info.payoutSegIdx !== targetSegIdx || info.weekKey !== targetWeekKey) return sum;
         return sum + ((parseFloat(s.price) || 0) * (parseInt(s.quantity) || 1)) + (parseFloat(s.tip) || 0);
       }, 0);
+    }
+
+    function getUserTotalVerifiedSales(targetUser, contextSales = sales, referenceDateYMD = null) {
+      if (!targetUser) return 0;
+      const targetDate = referenceDateYMD || formatDateToYMD(new Date());
+      const weekKey = getPayWeekKey(targetDate);
+      const sortedAsc = getSortedUserPayouts(targetUser, true);
+      let segIdx = sortedAsc.length;
+      if (referenceDateYMD) {
+        const refDayEnd = parseLocalYMD(referenceDateYMD);
+        if (refDayEnd) refDayEnd.setHours(23, 59, 59, 999);
+        const probeSale = { date: referenceDateYMD, timestamp: refDayEnd ? refDayEnd.getTime() : Date.now() };
+        segIdx = 0;
+        for (let i = 0; i < sortedAsc.length; i++) {
+          if (isSaleAfterPayout(probeSale, sortedAsc[i])) segIdx++;
+          else break;
+        }
+      }
+      return getCycleSalesVolume(targetUser, weekKey, segIdx, contextSales);
+    }
+
+    function getCycleRateSummary(targetUser, verifiedSales) {
+      if (!targetUser) return { badgeText: '0% rate', salaryLabel: 'Salary', singleRate: 0, rateText: '0%' };
+      const roleLow = (targetUser.role || '').toLowerCase();
+      if (roleLow === 'owner') return { badgeText: '100% Net Profit', salaryLabel: 'Net Profit', singleRate: 100, rateText: '100%' };
+
+      const mode = targetUser.commissionMode || 'bracket';
+      const val = Number(targetUser.profitPercent) || 0;
+      if (mode === 'flatRate') return { badgeText: `Flat ${val || 25}%`, salaryLabel: `Salary (${val || 25}%)`, singleRate: val || 25, rateText: `${val || 25}%` };
+      if (mode === 'profitShare') return { badgeText: `${val || 25}% share`, salaryLabel: `Salary (${val || 25}%)`, singleRate: val || 25, rateText: `${val || 25}%` };
+      if (mode === 'fixedPerSale') return { badgeText: `${formatCurrency(val)} / unit`, salaryLabel: 'Salary', singleRate: null, rateText: `${formatCurrency(val)}/unit` };
+
+      const cycleSet = new Map();
+      (verifiedSales || []).forEach(s => {
+        if (!s || !s.sold) return;
+        const info = getSaleCycleInfo(s, targetUser);
+        if (!cycleSet.has(info.cycleKey)) {
+          const vol = getCycleSalesVolume(targetUser, info.weekKey, info.payoutSegIdx, sales);
+          cycleSet.set(info.cycleKey, getCommissionRateForProfit(vol, targetUser.id));
+        }
+      });
+
+      const uniqueRates = Array.from(new Set(cycleSet.values())).sort((a, b) => a - b);
+      if (uniqueRates.length === 1) {
+        return {
+          badgeText: `${uniqueRates[0]}% rate`,
+          salaryLabel: `Salary (${uniqueRates[0]}%)`,
+          singleRate: uniqueRates[0],
+          rateText: `${uniqueRates[0]}%`
+        };
+      }
+      if (uniqueRates.length > 1) {
+        const joined = uniqueRates.map(r => `${r}%`).join(' / ');
+        return {
+          badgeText: `Weekly tiers (${joined})`,
+          salaryLabel: 'Salary',
+          singleRate: null,
+          rateText: joined
+        };
+      }
+      const curRate = getCommissionRateForProfit(getUserTotalVerifiedSales(targetUser, sales), targetUser.id);
+      return {
+        badgeText: `${curRate}% rate`,
+        salaryLabel: `Salary (${curRate}%)`,
+        singleRate: curRate,
+        rateText: `${curRate}%`
+      };
     }
 
     function calculateUnitCommission(product, sellPrice, buyPrice, targetUser = currentSession, projectedSalesTotal = null) {
@@ -3478,11 +3763,139 @@
       if (sale.customCommission !== undefined && sale.customCommission !== null && sale.customCommission !== '') {
         return Number(sale.customCommission) || 0;
       }
-      const u = users.find(x => String(x.id) === String(sale.userId) || sanitizeUserKey(x.username) === sale.userKey)
-        || { id: sale.userId, username: sale.soldBy, userKey: sale.userKey, role: sale.userRole || 'admin', commissionMode: 'bracket' };
+      const u = findMatchedUserForSale(sale) || {
+        id: sale.userId,
+        username: sale.soldBy || sale.userName,
+        userKey: sale.userKey,
+        role: sale.userRole || 'admin',
+        commissionMode: 'bracket'
+      };
       const prod = findProductById(sale.productId);
-      const userSalesTotal = Math.max(getUserTotalVerifiedSales(u, contextSales), (Number(sale.price) || 0) * (parseInt(sale.quantity) || 1));
-      return calculateUnitCommission(prod, sale.price, sale.buyPrice, u, userSalesTotal);
+      const info = getSaleCycleInfo(sale, u);
+      const cycleSalesTotal = getCycleSalesVolume(u, info.weekKey, info.payoutSegIdx, contextSales);
+      const saleRev = ((Number(sale.price) || 0) * (parseInt(sale.quantity) || 1)) + (Number(sale.tip) || 0);
+      const basis = Math.max(cycleSalesTotal, saleRev);
+      return calculateUnitCommission(prod, sale.price, sale.buyPrice, u, basis);
+    }
+
+    function getAdminUnpaidPayoutBreakdown(targetUser, contextSales = sales) {
+      if (!targetUser) return { total: 0, totalRaw: 0, weeks: [], salesCount: 0, itemCount: 0, salesRev: 0, capital: 0, profit: 0 };
+      const sortedAsc = getSortedUserPayouts(targetUser, true);
+      const unpaidSegIdx = sortedAsc.length;
+      const weekBuckets = {};
+
+      (contextSales || []).forEach(s => {
+        if (!s || !s.sold) return;
+        if (!doesSaleBelongToUser(s, targetUser)) return;
+        const info = getSaleCycleInfo(s, targetUser);
+        if (info.payoutSegIdx !== unpaidSegIdx) return;
+
+        if (!weekBuckets[info.weekKey]) {
+          weekBuckets[info.weekKey] = {
+            weekKey: info.weekKey,
+            label: getPayWeekLabel(info.weekKey),
+            sales: [],
+            salesRev: 0,
+            capital: 0,
+            profit: 0,
+            tips: 0,
+            salaryRaw: 0,
+            itemCount: 0
+          };
+        }
+        weekBuckets[info.weekKey].sales.push(s);
+      });
+
+      const weekKeys = Object.keys(weekBuckets).sort();
+      let totalSalaryRaw = 0;
+      let totalSalesRev = 0;
+      let totalCapital = 0;
+      let totalProfit = 0;
+      let totalSalesCount = 0;
+      let totalItemCount = 0;
+
+      const mode = targetUser.commissionMode || 'bracket';
+      const val = Number(targetUser.profitPercent) || 0;
+
+      const weeks = weekKeys.map(wk => {
+        const b = weekBuckets[wk];
+        const cycleVolume = getCycleSalesVolume(targetUser, wk, unpaidSegIdx, contextSales);
+        if (mode === 'flatRate') b.rateLabel = `${val || 25}%`;
+        else if (mode === 'profitShare') b.rateLabel = `${val || 25}%`;
+        else if (mode === 'fixedPerSale') b.rateLabel = `${formatCurrency(val)}/u`;
+        else b.rateLabel = `${getCommissionRateForProfit(cycleVolume, targetUser.id)}%`;
+
+        b.sales.forEach(s => {
+          const qty = parseInt(s.quantity) || 1;
+          const price = parseFloat(s.price) || 0;
+          const buy = parseFloat(s.buyPrice) || 0;
+          const tip = parseFloat(s.tip) || 0;
+          const rev = (price * qty) + tip;
+          const prof = ((price - buy) * qty) + tip;
+          const unitComm = getEffectiveSaleUnitCommission(s, contextSales);
+          const comm = (unitComm * qty) + tip;
+
+          b.salesRev += rev;
+          b.capital += buy * qty;
+          b.profit += prof;
+          b.tips += tip;
+          b.salaryRaw += comm;
+          b.itemCount += qty;
+        });
+
+        b.salary = Math.round(b.salaryRaw * 100) / 100;
+        totalSalaryRaw += b.salaryRaw;
+        totalSalesRev += b.salesRev;
+        totalCapital += b.capital;
+        totalProfit += b.profit;
+        totalSalesCount += b.sales.length;
+        totalItemCount += b.itemCount;
+        return b;
+      });
+
+      return {
+        total: Math.round(totalSalaryRaw * 100) / 100,
+        totalRaw: totalSalaryRaw,
+        weeks,
+        salesCount: totalSalesCount,
+        itemCount: totalItemCount,
+        salesRev: totalSalesRev,
+        capital: totalCapital,
+        profit: totalProfit
+      };
+    }
+
+    async function syncCycleSalesCommissionsForUser(targetUser, weekKey = null, segIdx = null) {
+      if (!targetUser) return 0;
+      const targetWk = weekKey || getPayWeekKey(new Date());
+      const updates = [];
+      (sales || []).forEach(s => {
+        if (!s || !s.sold) return;
+        if (isOwnerSale(s)) return;
+        if (s.customCommission !== undefined && s.customCommission !== null && s.customCommission !== '') return;
+        if (!doesSaleBelongToUser(s, targetUser)) return;
+        const info = getSaleCycleInfo(s, targetUser);
+        if (info.weekKey !== targetWk) return;
+        if (segIdx !== null && info.payoutSegIdx !== segIdx) return;
+
+        const qty = parseInt(s.quantity) || 1;
+        const tip = parseFloat(s.tip) || 0;
+        const newUnitComm = Math.round(getEffectiveSaleUnitCommission(s, sales) * 10000) / 10000;
+        const newTotComm = Math.round(((newUnitComm * qty) + tip) * 100) / 100;
+        if (Math.abs((Number(s.commission) || 0) - newUnitComm) >= 0.005 || Math.abs((Number(s.totalCommission) || 0) - newTotComm) >= 0.005) {
+          s.commission = newUnitComm;
+          s.totalCommission = newTotComm;
+          const uKey = s.userKey || sanitizeUserKey(s.soldBy || targetUser.username);
+          updates.push(getRef(`sales/${uKey}/${s.id}`).update({
+            commission: newUnitComm,
+            totalCommission: newTotComm
+          }));
+        }
+      });
+      if (updates.length > 0) {
+        await Promise.all(updates);
+      }
+      return updates.length;
     }
 
     // =================== SALES LOG TABLE & MODAL ===================
@@ -3521,7 +3934,7 @@
       tableWrap.style.display = 'block';
 
       tbody.innerHTML = filtered.map(sale => {
-        const commTotal = (getEffectiveSaleUnitCommission(sale, filtered) * (parseInt(sale.quantity) || 1)) + (Number(sale.tip) || 0);
+        const commTotal = (getEffectiveSaleUnitCommission(sale, sales) * (parseInt(sale.quantity) || 1)) + (Number(sale.tip) || 0);
         const hasTip = Number(sale.tip) > 0;
         return `
           <tr>
@@ -3580,7 +3993,12 @@
       getRef(`sales/${userKey}/${saleId}`).update({
         status: nextStatus,
         sold: nextStatus === 'ongoing'
-      }).then(() => {
+      }).then(async () => {
+        sale.status = nextStatus;
+        sale.sold = (nextStatus === 'ongoing');
+        const targetUser = findMatchedUserForSale(sale) || currentSession;
+        const wk = getPayWeekKey(getSaleDateYMD(sale) || formatDateToYMD(new Date()));
+        await syncCycleSalesCommissionsForUser(targetUser, wk);
         showToast(`Status changed to ${nextStatus.toUpperCase()}`);
         autoCalculatePayouts();
       });
@@ -3602,7 +4020,7 @@
       }
       populateAccountEmailDatalist();
       if (document.getElementById('saleDateInput')) {
-        document.getElementById('saleDateInput').value = new Date().toISOString().split('T')[0];
+        document.getElementById('saleDateInput').value = formatDateToYMD(new Date());
       }
       if (document.getElementById('saleCustomCommissionInput')) {
         document.getElementById('saleCustomCommissionInput').value = '';
@@ -3738,7 +4156,7 @@
       handleProductChangeForProfileTracking(productId);
     });
 
-    ['productQuantity', 'productPriceInput', 'saleBuyPriceInput', 'saleTipInput', 'saleCustomCommissionInput', 'saleAssignedUserSelect'].forEach(id => {
+    ['productQuantity', 'productPriceInput', 'saleBuyPriceInput', 'saleTipInput', 'saleCustomCommissionInput', 'saleAssignedUserSelect', 'saleDateInput'].forEach(id => {
       const el = document.getElementById(id);
       if (el) {
         el.addEventListener('input', () => displayProductDetails(document.getElementById('productSelect').value));
@@ -3771,14 +4189,20 @@
       const customCommInput = document.getElementById('saleCustomCommissionInput');
 
       const baseSell = Number(product.soloPrice ?? product.sellPrice ?? product.fullPrice ?? product.sharedPrice) || 0;
-      const userPrice = priceInput && priceInput.value ? parseFloat(priceInput.value) : baseSell;
+      const userPrice = (priceInput && priceInput.value !== '') ? (parseFloat(priceInput.value) || 0) : baseSell;
       const baseBuy = Number(product.buyPrice ?? product.capital ?? 0);
       const buyPriceInput = document.getElementById('saleBuyPriceInput');
-      const userBuy = buyPriceInput && buyPriceInput.value !== '' ? parseFloat(buyPriceInput.value) : baseBuy;
+      const userBuy = (buyPriceInput && buyPriceInput.value !== '') ? (parseFloat(buyPriceInput.value) || 0) : baseBuy;
+      const tipInput = document.getElementById('saleTipInput');
+      const tip = tipInput && tipInput.value ? parseFloat(tipInput.value) || 0 : 0;
 
       const targetUser = getSelectedSaleTargetUser();
-      const existingUserSales = getUserTotalVerifiedSales(targetUser);
-      const projectedTotalSales = existingUserSales + (userPrice * qty);
+      const previewDate = (isOwner() && document.getElementById('saleDateInput')?.value)
+        ? document.getElementById('saleDateInput').value
+        : (editingSale?.date || formatDateToYMD(new Date()));
+      const contextWithoutEditing = editingSale ? sales.filter(s => String(s.id) !== String(editingSale.id)) : sales;
+      const existingUserSales = getUserTotalVerifiedSales(targetUser, contextWithoutEditing, previewDate);
+      const projectedTotalSales = existingUserSales + (userPrice * qty) + tip;
       const activeRate = (targetUser && (targetUser.role || '').toLowerCase() === 'owner')
         ? 100
         : getCommissionRateForProfit(projectedTotalSales, targetUser ? targetUser.id : null);
@@ -3788,8 +4212,6 @@
         unitEarn = parseFloat(customCommInput.value) || 0;
       }
 
-      const tipInput = document.getElementById('saleTipInput');
-      const tip = tipInput && tipInput.value ? parseFloat(tipInput.value) || 0 : 0;
       const unitProfit = Math.max(userPrice - userBuy, 0);
       const totalRev = (userPrice * qty) + tip;
       const totalCap = userBuy * qty;
@@ -4015,9 +4437,11 @@
       const warranty = document.querySelector('input[name="warranty"]:checked')?.value || 'FW';
       const accountType = document.querySelector('input[name="accountType"]:checked')?.value || 'Solo';
       const quantity = parseInt(document.getElementById('productQuantity').value) || 1;
-      const price = parseFloat(document.getElementById('productPriceInput').value) || Number(product.sellPrice || 0);
+      const rawPrice = document.getElementById('productPriceInput')?.value;
+      const price = (rawPrice !== undefined && rawPrice !== '') ? (parseFloat(rawPrice) || 0) : Number(product.sellPrice || 0);
 
-      const buyPrice = parseFloat(document.getElementById('saleBuyPriceInput')?.value) || Number(product.buyPrice ?? product.capital ?? 0);
+      const rawBuyPrice = document.getElementById('saleBuyPriceInput')?.value;
+      const buyPrice = (rawBuyPrice !== undefined && rawBuyPrice !== '') ? (parseFloat(rawBuyPrice) || 0) : Number(product.buyPrice ?? product.capital ?? 0);
       const tip = parseFloat(document.getElementById('saleTipInput')?.value) || 0;
 
       const targetUser = getSelectedSaleTargetUser();
@@ -4027,17 +4451,39 @@
       const targetUserId = targetUser ? targetUser.id : currentSession.id;
       const targetUserRole = targetUser ? targetUser.role : currentSession.role;
 
+      const timestamp = Date.now();
+      const saleId = isEditing ? editingSale.id : timestamp;
+      const chosenDate = (isOwner() && document.getElementById('saleDateInput')?.value)
+        ? document.getElementById('saleDateInput').value
+        : (isEditing && editingSale.date ? editingSale.date : formatDateToYMD(new Date()));
+
+      const contextWithoutEditing = isEditing ? sales.filter(s => String(s.id) !== String(editingSale.id)) : sales;
       const customCommInput = document.getElementById('saleCustomCommissionInput');
-      const projectedSales = getUserTotalVerifiedSales(targetUser) + (price * quantity);
+      const existingCycleVol = getUserTotalVerifiedSales(targetUser, contextWithoutEditing, chosenDate);
+      const projectedSales = existingCycleVol + (price * quantity) + tip;
       let commissionAmount = calculateUnitCommission(product, price, buyPrice, targetUser, projectedSales);
       let hasCustomCommission = false;
       if (isOwner() && customCommInput && customCommInput.value !== '') {
         commissionAmount = parseFloat(customCommInput.value) || 0;
         hasCustomCommission = true;
+      } else if (!isOwner() && isEditing && editingSale.customCommission !== undefined && editingSale.customCommission !== null && editingSale.customCommission !== '') {
+        commissionAmount = Number(editingSale.customCommission) || 0;
+        hasCustomCommission = true;
       }
 
-      const timestamp = Date.now();
-      const saleId = isEditing ? editingSale.id : timestamp;
+      let saleTimestamp = timestamp;
+      if (isEditing) {
+        if (editingSale.date === chosenDate && editingSale.timestamp) {
+          saleTimestamp = editingSale.timestamp;
+        } else if (chosenDate === formatDateToYMD(new Date())) {
+          saleTimestamp = timestamp;
+        } else {
+          const dParsed = parseLocalYMD(chosenDate);
+          if (dParsed) dParsed.setHours(12, 0, 0, 0);
+          saleTimestamp = dParsed ? dParsed.getTime() : (editingSale.timestamp || timestamp);
+        }
+      }
+
       let accountId = document.getElementById('accountIdSelect')?.value || null;
       if (!accountId && accountEmail) {
         const matchedAcc = accounts.find(a => (a.id || '').trim().toLowerCase() === accountEmail.toLowerCase());
@@ -4048,9 +4494,9 @@
         profileNumVal = document.getElementById('customProfileNumberInput')?.value.trim();
       }
       const profileNumber = profileNumVal ? (parseInt(profileNumVal) || profileNumVal) : null;
-      const chosenDate = (isOwner() && document.getElementById('saleDateInput')?.value)
-        ? document.getElementById('saleDateInput').value
-        : (isEditing && editingSale.date ? editingSale.date : new Date().toISOString().split('T')[0]);
+
+      const prevSaleUser = isEditing ? (findMatchedUserForSale(editingSale) || { id: editingSale.userId, username: editingSale.soldBy, userKey: editingSale.userKey, role: editingSale.userRole || 'admin', commissionMode: 'bracket' }) : null;
+      const prevWeekKey = isEditing ? getPayWeekKey(getSaleDateYMD(editingSale) || chosenDate) : null;
 
       const newSale = {
         id: saleId,
@@ -4080,7 +4526,7 @@
         status: document.getElementById('productSoldStatus').value || 'ongoing',
         sold: (document.getElementById('productSoldStatus').value || 'ongoing') === 'ongoing',
         date: chosenDate,
-        timestamp: isEditing && editingSale.timestamp ? editingSale.timestamp : timestamp,
+        timestamp: saleTimestamp,
         receiptUrl: document.getElementById('saleReceiptUrlInput')?.value.trim() || null
       };
 
@@ -4090,6 +4536,17 @@
           await getRef('sales/' + editingSale.userKey + '/' + saleId).remove();
         }
         await getRef('sales/' + targetUserKey + '/' + saleId).set(newSale);
+        const normalizedLocal = normalizeSaleRecord(newSale);
+        const existingIdx = sales.findIndex(s => String(s.id) === String(saleId));
+        if (existingIdx >= 0) sales[existingIdx] = normalizedLocal;
+        else sales.unshift(normalizedLocal);
+
+        const newWeekKey = getPayWeekKey(chosenDate);
+        await syncCycleSalesCommissionsForUser(targetUser, newWeekKey);
+        if (isEditing && prevSaleUser && (prevWeekKey !== newWeekKey || sanitizeUserKey(prevSaleUser.username) !== targetUserKey)) {
+          await syncCycleSalesCommissionsForUser(prevSaleUser, prevWeekKey);
+        }
+
         closeSaleModal();
         editingSale = null;
         showToast(isEditing ? 'Sale updated!' : 'Sale added!');
@@ -4126,7 +4583,7 @@
               : '';
         }
         if (document.getElementById('saleDateInput')) {
-          document.getElementById('saleDateInput').value = sale.date || new Date().toISOString().split('T')[0];
+          document.getElementById('saleDateInput').value = sale.date || formatDateToYMD(new Date());
         }
         if (document.getElementById('saleAssignedUserSelect')) {
           const matchUser = users.find(u => String(u.id) === String(sale.userId) || sanitizeUserKey(u.username) === sale.userKey);
@@ -4163,9 +4620,13 @@
       if (!sale) return;
       if (!confirm(`Delete ${sale.productName || 'this sale'}?`)) return;
       const userKey = sale.userKey || sanitizeUserKey(sale.soldBy || currentSession.username);
+      const targetUser = findMatchedUserForSale(sale) || currentSession;
+      const wk = getPayWeekKey(getSaleDateYMD(sale) || formatDateToYMD(new Date()));
       showSyncingIndicator();
       getRef(`sales/${userKey}/${saleId}`).remove()
-        .then(() => {
+        .then(async () => {
+          sales = sales.filter(s => String(s.id) !== String(saleId));
+          await syncCycleSalesCommissionsForUser(targetUser, wk);
           showToast('Sale deleted');
           autoCalculatePayouts();
         })
@@ -4236,6 +4697,8 @@
     }
     async function submitBulkSales() {
       const userKey = sanitizeUserKey(currentSession.username);
+      const todayStr = formatDateToYMD(new Date());
+      let cumulativeRev = 0;
       let saved = 0;
       for (const rowId of bulkSalesRows) {
         const row = document.getElementById(`bulk-row-${rowId}`);
@@ -4243,12 +4706,18 @@
         const productId = row.querySelector('.bulk-product').value;
         if (!productId) continue;
         const product = findProductById(productId);
-        const buyPrice = parseFloat(row.querySelector('.bulk-buy')?.value) || (product ? Number(product.buyPrice ?? product.capital ?? 0) : 0);
-        const price = parseFloat(row.querySelector('.bulk-sell').value) || 0;
+        const rawBulkBuy = row.querySelector('.bulk-buy')?.value;
+        const buyPrice = (rawBulkBuy !== undefined && rawBulkBuy !== '') ? (parseFloat(rawBulkBuy) || 0) : (product ? Number(product.buyPrice ?? product.capital ?? 0) : 0);
+        const rawBulkSell = row.querySelector('.bulk-sell').value;
+        const price = (rawBulkSell !== undefined && rawBulkSell !== '') ? (parseFloat(rawBulkSell) || 0) : 0;
         const qty = parseInt(row.querySelector('.bulk-qty').value) || 1;
         const tip = parseFloat(row.querySelector('.bulk-tip')?.value) || 0;
-        const comm = calculateUnitCommission(product, price, buyPrice, currentSession);
-        const saleId = Date.now() + saved;
+        const status = row.querySelector('.bulk-status').value || 'ongoing';
+        const isSold = status === 'ongoing';
+        const projectedVol = getUserTotalVerifiedSales(currentSession, sales, todayStr) + cumulativeRev + (isSold ? ((price * qty) + tip) : 0);
+        const comm = calculateUnitCommission(product, price, buyPrice, currentSession, projectedVol);
+        const nowTs = Date.now() + saved;
+        const saleId = nowTs;
         const bulkBuyer = row.querySelector('.bulk-username').value.trim() || '-';
         const bulkEmail = row.querySelector('.bulk-email').value.trim() || '-';
         let bulkAccId = null;
@@ -4256,7 +4725,7 @@
           const matchedAcc = accounts.find(a => (a.id || '').trim().toLowerCase() === bulkEmail.toLowerCase());
           if (matchedAcc) bulkAccId = matchedAcc.id;
         }
-        await getRef(`sales/${userKey}/${saleId}`).set({
+        const saleObj = {
           id: saleId,
           userId: currentSession.id,
           userName: (currentSession.customName || currentSession.username).replace(/^@/, ''),
@@ -4279,14 +4748,18 @@
           tip: tip,
           totalPrice: (price * qty) + tip,
           totalCommission: (comm * qty) + tip,
-          status: row.querySelector('.bulk-status').value || 'ongoing',
-          sold: (row.querySelector('.bulk-status').value || 'ongoing') === 'ongoing',
-          date: new Date().toISOString().split('T')[0],
-          timestamp: Date.now()
-        });
+          status: status,
+          sold: isSold,
+          date: todayStr,
+          timestamp: nowTs
+        };
+        await getRef(`sales/${userKey}/${saleId}`).set(saleObj);
+        sales.unshift(normalizeSaleRecord(saleObj));
+        if (isSold) cumulativeRev += (price * qty) + tip;
         saved++;
       }
       if (saved > 0) {
+        await syncCycleSalesCommissionsForUser(currentSession, getPayWeekKey(todayStr));
         document.getElementById('bulkSalesTableBody').innerHTML = '';
         bulkSalesRows = [];
         closeBulkSaleModal();
@@ -4459,7 +4932,7 @@
         sharedPrice: sellPrice,
         fullPrice: sellPrice,
         totalProfiles: type === 'Shared' ? 2 : 1,
-        updatedDate: new Date().toISOString().split('T')[0]
+        updatedDate: formatDateToYMD(new Date())
       };
       delete updated.isFromProducts;
 
@@ -4500,7 +4973,7 @@
         sharedPrice: sellPrice,
         fullPrice: sellPrice,
         totalProfiles: type === 'Shared' ? 2 : 1,
-        createdAt: new Date().toISOString().split('T')[0]
+        createdAt: formatDateToYMD(new Date())
       };
 
       showSyncingIndicator();
@@ -4805,7 +5278,7 @@
         fullPrice: accountPrice,
         soloPrice,
         sharedPrice,
-        createdDate: (existingAcc && existingAcc.createdDate) ? existingAcc.createdDate : new Date().toISOString().split('T')[0],
+        createdDate: (existingAcc && existingAcc.createdDate) ? existingAcc.createdDate : formatDateToYMD(new Date()),
         createdBy: currentSession.username
       });
 
@@ -4954,10 +5427,12 @@
           commissionBrackets = getDefaultBracketsList();
           getCommissionBracketsRef().set(commissionBrackets);
         }
+        dataReady.brackets = true;
         renderCommissionBrackets();
         updateSalarySimulator();
         updateUI();
         renderProductList();
+        scheduleAutoCalculatePayouts();
       });
     }
 
@@ -4974,26 +5449,49 @@
     }
 
     async function recalculateAllSalesCommissions() {
-      if (!isOwner() || !confirm('Recalculate commission on all non-custom Admin sales using current rules (Sales - Capital = Profit, Profit × Rate% = Salary)?')) return;
+      if (!isOwner() || !confirm('Recalculate commissions across all weekly cycles and sync pending payouts using current rules (Sales - Capital = Profit, Profit × Rate% = Salary)?')) return;
       showSyncingIndicator();
-      let count = 0;
-      for (const s of sales) {
-        if ((s.userRole || '').toLowerCase() === 'owner') continue;
-        if (s.customCommission !== undefined && s.customCommission !== null) continue;
-        const prod = findProductById(s.productId);
-        const u = users.find(x => String(x.id) === String(s.userId) || sanitizeUserKey(x.username) === s.userKey)
-          || { id: s.userId, username: s.soldBy, userKey: s.userKey, role: 'admin', commissionMode: 'bracket' };
-        const userSalesTotal = Math.max(getUserTotalVerifiedSales(u, sales), (Number(s.price) || 0) * (parseInt(s.quantity) || 1));
-        const newUnitComm = calculateUnitCommission(prod, s.price, s.buyPrice, u, userSalesTotal);
-        const qty = parseInt(s.quantity) || 1;
-        await getRef(`sales/${s.userKey}/${s.id}`).update({
-          commission: newUnitComm,
-          totalCommission: (newUnitComm * qty) + (parseFloat(s.tip) || 0)
-        });
-        count++;
+      try {
+        const updatePromises = [];
+        let changedCount = 0;
+
+        for (const s of (sales || [])) {
+          if (!s || isOwnerSale(s)) continue;
+          if (s.customCommission !== undefined && s.customCommission !== null && s.customCommission !== '') continue;
+          const u = findMatchedUserForSale(s) || {
+            id: s.userId,
+            username: s.soldBy || s.userName,
+            userKey: s.userKey,
+            role: 'admin',
+            commissionMode: 'bracket'
+          };
+          const newUnitComm = Math.round(getEffectiveSaleUnitCommission(s, sales) * 10000) / 10000;
+          const qty = parseInt(s.quantity) || 1;
+          const tip = parseFloat(s.tip) || 0;
+          const newTotComm = Math.round(((newUnitComm * qty) + tip) * 100) / 100;
+
+          if (Math.abs((Number(s.commission) || 0) - newUnitComm) >= 0.005 || Math.abs((Number(s.totalCommission) || 0) - newTotComm) >= 0.005) {
+            s.commission = newUnitComm;
+            s.totalCommission = newTotComm;
+            const uKey = s.userKey || sanitizeUserKey(s.soldBy || u.username);
+            updatePromises.push(getRef(`sales/${uKey}/${s.id}`).update({
+              commission: newUnitComm,
+              totalCommission: newTotComm
+            }));
+            changedCount++;
+          }
+        }
+
+        if (updatePromises.length > 0) {
+          await Promise.all(updatePromises);
+        }
+
+        autoCalculatePayouts({ clearCustomOverrides: true });
+        updateUI();
+        showToast(changedCount > 0 ? `Recalculated ${changedCount} sales & synced payouts!` : 'All sales & payouts are accurate & synced!');
+      } catch (err) {
+        showToast('Error recalculating: ' + (err.message || err), 'error');
       }
-      autoCalculatePayouts();
-      showToast(`Recalculated ${count} sales!`);
     }
 
     function getCommissionRateForProfit(saleAmount, userId = null) {
@@ -5114,72 +5612,152 @@
     // =================== PAYOUTS & SALARY VIEW ===================
     function setPayoutPeriod(period) {
       currentPayoutPeriod = period;
-      autoCalculatePayouts();
+      if (isAllCoreDataReady()) autoCalculatePayouts();
       refreshPayoutViews();
       updateSalaryStatsGrid();
     }
 
-    function autoCalculatePayouts() {
+    function doesPayoutBelongToUser(payoutRec, targetUser) {
+      if (!payoutRec || !targetUser) return false;
+      const uId = targetUser.id !== undefined ? targetUser.id : targetUser.userId;
+      return uId !== undefined && uId !== null && String(payoutRec.userId) === String(uId);
+    }
+
+    function autoCalculatePayouts(options = {}) {
+      if (!isAllCoreDataReady()) return;
+      const clearCustomOverrides = !!(options && options.clearCustomOverrides);
       const adminUsers = isOwner()
         ? users.filter(u => (u.role || '').toLowerCase() === 'admin')
         : users.filter(u => String(u.id) === String(currentSession.id) || u.username === currentSession.username);
 
-      const { sunday } = getPayWeekRange(new Date());
-      const sunStr = formatDateToYMD(sunday);
+      const todayStr = formatDateToYMD(new Date());
+      const basePid = Date.now();
+      let idx = 0;
 
       adminUsers.forEach(user => {
-        const uKey = sanitizeUserKey(user.username);
-        const existingPending = payouts.find(p => String(p.userId) === String(user.id) && p.status === 'pending');
+        idx++;
+        const userPendings = payouts
+          .filter(p => p && p.status === 'pending' && doesPayoutBelongToUser(p, user))
+          .sort((a, b) => (Number(b.id) || 0) - (Number(a.id) || 0));
 
-        // If pending payout was customized / adjusted by owner (e.g. 43.69), preserve it!
-        if (existingPending && (existingPending.isCustom || existingPending.manualAdjusted)) {
+        const existingPending = userPendings[0] || null;
+
+        // Clean up any accidental duplicate pending payout records for the same admin
+        if (userPendings.length > 1) {
+          const dupIds = new Set(userPendings.slice(1).map(d => String(d.id)));
+          userPendings.slice(1).forEach(dup => {
+            getRef('payouts/' + dup.id).remove();
+          });
+          payouts = payouts.filter(p => !dupIds.has(String(p.id)));
+        }
+
+        const breakdown = getAdminUnpaidPayoutBreakdown(user, sales);
+        const autoAmount = breakdown.total;
+
+        let manualAdjustment = 0;
+        let isCustom = false;
+        let manualAdjusted = false;
+        let finalAmount = autoAmount;
+
+        if (!clearCustomOverrides && existingPending) {
+          const hasNumericAdj = existingPending.manualAdjustment !== undefined && existingPending.manualAdjustment !== null && !isNaN(existingPending.manualAdjustment);
+          if (hasNumericAdj) {
+            manualAdjustment = Math.round((Number(existingPending.manualAdjustment) || 0) * 100) / 100;
+            const hasAdj = Math.abs(manualAdjustment) >= 0.005;
+            isCustom = hasAdj;
+            manualAdjusted = hasAdj;
+            finalAmount = Math.max(0, Math.round((autoAmount + manualAdjustment) * 100) / 100);
+          } else if (existingPending.isCustom || existingPending.manualAdjusted) {
+            // Legacy manual override without adjustment delta: keep amount passively until owner resets or clicks Recalculate
+            isCustom = true;
+            manualAdjusted = !!existingPending.manualAdjusted;
+            finalAmount = Math.round((Number(existingPending.amount) || 0) * 100) / 100;
+            manualAdjustment = Math.round((finalAmount - autoAmount) * 100) / 100;
+          }
+        }
+
+        if (finalAmount < 0.01 && !isCustom) {
+          if (existingPending) {
+            payouts = payouts.filter(p => String(p.id) !== String(existingPending.id));
+            getRef('payouts/' + existingPending.id).remove();
+          }
           return;
         }
 
-        const userPayouts = (payoutHistoryList || []).filter(p => String(p.userId) === String(user.id));
-        const lastPayout = userPayouts.length > 0 ? userPayouts[0] : null;
-        const lastTs = lastPayout ? (lastPayout.timestamp || (lastPayout.paidDate ? new Date(lastPayout.paidDate + 'T00:00:00').getTime() : 0)) : 0;
+        if (existingPending) {
+          const oldAmt = Number(existingPending.amount);
+          const oldAuto = Number(existingPending.autoAmount);
+          const oldAdj = Number(existingPending.manualAdjustment);
+          const amtDiff = isNaN(oldAmt) || Math.abs(oldAmt - finalAmount) >= 0.005;
+          const autoDiff = isNaN(oldAuto) || Math.abs(oldAuto - autoAmount) >= 0.005;
+          const adjDiff = isNaN(oldAdj) || Math.abs(oldAdj - manualAdjustment) >= 0.005;
+          const flagDiff = (!!existingPending.isCustom !== isCustom) || (!!existingPending.manualAdjusted !== manualAdjusted);
 
-        const cycleSales = sales.filter(s => {
-          if (!s.sold) return false;
-          const match = (String(s.userId) === String(user.id)) || (s.userKey === uKey);
-          if (!match) return false;
-          const sTs = s.timestamp || (s.date ? new Date(s.date + 'T00:00:00').getTime() : 0);
-          const sDate = s.date || (s.timestamp ? formatDateToYMD(new Date(s.timestamp)) : '');
-          if (lastPayout && lastTs > 0) {
-            return sTs > lastTs || (sDate > (lastPayout.paidDate || ''));
+          if (amtDiff || autoDiff || adjDiff || flagDiff) {
+            const patch = {
+              amount: finalAmount,
+              autoAmount,
+              manualAdjustment,
+              isCustom,
+              manualAdjusted,
+              date: existingPending.date || todayStr
+            };
+            Object.assign(existingPending, patch);
+            getRef('payouts/' + existingPending.id).update(patch);
           }
-          return sDate >= sunStr;
-        });
-
-        const cycleCommission = cycleSales.reduce((sum, s) => {
-          const qty = parseInt(s.quantity) || 1;
-          const tip = parseFloat(s.tip) || 0;
-          const unitComm = (s.customCommission !== undefined && s.customCommission !== null && s.customCommission !== '')
-            ? Number(s.customCommission)
-            : (Number(s.commission) || getEffectiveSaleUnitCommission(s, cycleSales));
-          return sum + (unitComm * qty) + tip;
-        }, 0);
-
-        const outstanding = Math.round(cycleCommission * 100) / 100;
-
-        if (outstanding >= 0.01) {
-          if (existingPending) {
-            getRef('payouts/' + existingPending.id).update({ amount: outstanding });
-          } else {
-            const pid = Date.now() + Math.floor(Math.random() * 1000);
-            getRef('payouts/' + pid).set({
-              id: pid,
-              userId: user.id,
-              amount: outstanding,
-              status: 'pending',
-              date: new Date().toISOString().split('T')[0]
-            });
-          }
-        } else if (existingPending) {
-          getRef('payouts/' + existingPending.id).remove();
+        } else if (finalAmount >= 0.01) {
+          const pid = basePid + idx;
+          const newRec = {
+            id: pid,
+            userId: user.id,
+            amount: finalAmount,
+            autoAmount,
+            manualAdjustment: 0,
+            isCustom: false,
+            manualAdjusted: false,
+            status: 'pending',
+            date: todayStr
+          };
+          payouts.push(newRec);
+          getRef('payouts/' + pid).set(newRec);
         }
       });
+
+      refreshPayoutViews();
+      updateSalaryStatsGrid();
+    }
+
+    function resetPendingAdjustment(payoutId) {
+      if (!isOwner()) return;
+      const rec = payouts.find(p => String(p.id) === String(payoutId));
+      if (!rec) return;
+      const user = users.find(u => String(u.id) === String(rec.userId));
+      const breakdown = user ? getAdminUnpaidPayoutBreakdown(user, sales) : { total: 0 };
+      const autoAmount = breakdown.total;
+
+      showSyncingIndicator();
+      if (autoAmount < 0.01) {
+        payouts = payouts.filter(p => String(p.id) !== String(payoutId));
+        getRef('payouts/' + payoutId).remove().then(() => {
+          refreshPayoutViews();
+          updateSalaryStatsGrid();
+          showToast('Adjustment cleared (₱0.00 pending)');
+        });
+      } else {
+        const patch = {
+          amount: autoAmount,
+          autoAmount,
+          manualAdjustment: 0,
+          isCustom: false,
+          manualAdjusted: false
+        };
+        Object.assign(rec, patch);
+        getRef('payouts/' + payoutId).update(patch).then(() => {
+          refreshPayoutViews();
+          updateSalaryStatsGrid();
+          showToast('Reset pending payout to ' + formatCurrency(autoAmount));
+        });
+      }
     }
 
     function updateSalaryStatsGrid() {
@@ -5190,41 +5768,33 @@
 
       let targetSales = [];
       if (isOwner()) {
-        targetSales = sales.filter(s => s.sold && (s.userRole || '').toLowerCase() !== 'owner');
+        targetSales = sales.filter(s => s.sold && !isOwnerSale(s));
       } else {
-        const myKey = sanitizeUserKey(currentSession.username);
-        targetSales = sales.filter(s => (String(s.userId) === String(currentSession.id) || s.userKey === myKey) && s.sold);
+        targetSales = sales.filter(s => doesSaleBelongToUser(s, currentSession) && s.sold);
       }
 
       if (period === 'current') {
-        const { sunday } = getPayWeekRange(new Date());
-        const sunStr = formatDateToYMD(sunday);
         targetSales = targetSales.filter(s => {
-          const sUid = String(s.userId || '');
-          const userPayouts = (payoutHistoryList || []).filter(p => String(p.userId) === sUid);
-          const lastPayout = userPayouts.length > 0 ? userPayouts[0] : null;
-          if (lastPayout) {
-            const lastTs = lastPayout.timestamp || (lastPayout.paidDate ? new Date(lastPayout.paidDate + 'T00:00:00').getTime() : 0);
-            const sTs = s.timestamp || (s.date ? new Date(s.date + 'T00:00:00').getTime() : 0);
-            return sTs > lastTs || (s.date && lastPayout.paidDate && s.date > lastPayout.paidDate);
-          }
-          const sDate = s.date || (s.timestamp ? formatDateToYMD(new Date(s.timestamp)) : '');
-          return sDate >= sunStr;
+          const u = findMatchedUserForSale(s) || { id: s.userId, username: s.soldBy, userKey: s.userKey };
+          const lastPayout = getLastUserPayout(u);
+          return !lastPayout || isSaleAfterPayout(s, lastPayout);
         });
       } else if (period === 'week') {
         const { sunday, saturday } = getPayWeekRange(new Date());
         const sunStr = formatDateToYMD(sunday);
         const satStr = formatDateToYMD(saturday);
         targetSales = targetSales.filter(s => {
-          const d = s.date || (s.timestamp ? formatDateToYMD(new Date(s.timestamp)) : '');
+          const d = getSaleDateYMD(s);
           return d >= sunStr && d <= satStr;
         });
       } else if (period === 'month') {
         const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const monthAgo = new Date(today);
-        monthAgo.setMonth(today.getMonth() - 1);
-        targetSales = targetSales.filter(s => new Date(s.date) >= monthAgo);
+        const monthStartStr = formatDateToYMD(new Date(today.getFullYear(), today.getMonth(), 1));
+        const monthEndStr = formatDateToYMD(new Date(today.getFullYear(), today.getMonth() + 1, 0));
+        targetSales = targetSales.filter(s => {
+          const d = getSaleDateYMD(s);
+          return d >= monthStartStr && d <= monthEndStr;
+        });
       }
 
       let verifiedSales = 0;
@@ -5239,9 +5809,7 @@
         const buy = parseFloat(s.buyPrice) || 0;
         const tip = parseFloat(s.tip) || 0;
         const rev = (price * qty) + tip;
-        const unitComm = (s.customCommission !== undefined && s.customCommission !== null && s.customCommission !== '')
-          ? Number(s.customCommission)
-          : (Number(s.commission) || getEffectiveSaleUnitCommission(s, targetSales));
+        const unitComm = getEffectiveSaleUnitCommission(s, sales);
         const comm = (unitComm * qty) + tip;
 
         verifiedSales += rev;
@@ -5253,7 +5821,7 @@
 
       let relevantPending = payouts.filter(p => p.status === 'pending');
       if (!isOwner()) {
-        relevantPending = relevantPending.filter(p => String(p.userId) === String(currentSession.id));
+        relevantPending = relevantPending.filter(p => doesPayoutBelongToUser(p, currentSession));
       }
       const pendingTotal = relevantPending.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
 
@@ -5292,7 +5860,7 @@
       if (!container) return;
       let pending = payouts.filter(p => p.status === 'pending');
       if (!isOwner()) {
-        pending = pending.filter(p => String(p.userId) === String(currentSession.id));
+        pending = pending.filter(p => doesPayoutBelongToUser(p, currentSession));
       }
       if (pending.length === 0) {
         container.innerHTML = `<p style="color:var(--muted-foreground); font-size:13px;">No pending payouts right now.</p>`;
@@ -5301,14 +5869,35 @@
       container.innerHTML = pending.map(payout => {
         const user = users.find(u => String(u.id) === String(payout.userId));
         const name = user ? (user.customName || user.username).replace(/^@/, '') : 'Admin';
+        const breakdown = user ? getAdminUnpaidPayoutBreakdown(user, sales) : null;
+        let subLines = '';
+        if (breakdown && breakdown.weeks.length > 0) {
+          subLines = breakdown.weeks.map(w => `
+            <div style="font-size:11px; color:var(--muted-foreground); margin-top:2px;">
+              Week ${w.label}: ${w.sales.length} sale${w.sales.length === 1 ? '' : 's'} (${formatCurrency(w.salesRev)}) • Profit ${formatCurrency(w.profit)} × ${w.rateLabel} = ${formatCurrency(w.salary)}
+            </div>
+          `).join('');
+        } else {
+          subLines = `<div style="font-size:11px; color:var(--muted-foreground);">Pending Commission Payout</div>`;
+        }
+
+        const isAdjusted = !!(payout.isCustom || payout.manualAdjusted);
+        const adjVal = Number(payout.manualAdjustment);
+        const autoRef = breakdown ? breakdown.total : (Number(payout.autoAmount) || 0);
+        const adjNote = isAdjusted
+          ? `<div style="font-size:11px; color:var(--warning); margin-top:2px;">${!isNaN(adjVal) && Math.abs(adjVal) >= 0.005 ? `Adjusted (${adjVal >= 0 ? '+' : ''}${formatCurrency(adjVal)}) • Auto: ${formatCurrency(autoRef)}` : `Manual adjustment • Auto: ${formatCurrency(autoRef)}`}</div>`
+          : '';
+
         return `
-          <div style="display:flex; align-items:center; justify-content:space-between; padding:12px; background:var(--muted); border-radius:12px; margin-bottom:8px;">
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; padding:12px; background:var(--muted); border-radius:12px; margin-bottom:8px;">
             <div>
               <div style="font-weight:600;">${name}</div>
-              <div style="font-size:11px; color:var(--muted-foreground);">Pending Commission Payout</div>
+              ${subLines}
+              ${adjNote}
             </div>
-            <div style="display:flex; align-items:center; gap:10px;">
+            <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
               <span style="font-size:15px; font-weight:700; color:var(--primary);">${formatCurrency(payout.amount)}</span>
+              ${isOwner() && isAdjusted ? `<button class="btn btn-sm btn-outline" onclick="resetPendingAdjustment('${payout.id}')" title="Clear manual adjustment & restore calculated amount">Reset</button>` : ''}
               ${isOwner() ? `<button class="btn btn-sm btn-primary" onclick="openMarkPaidModal('${payout.id}', '${payout.userId}', ${payout.amount})">Pay / Adjust</button>` : ''}
             </div>
           </div>
@@ -5338,7 +5927,7 @@
         };
       }
       const dateEl = document.getElementById('payoutPaidDate');
-      if (dateEl) dateEl.value = new Date().toISOString().split('T')[0];
+      if (dateEl) dateEl.value = formatDateToYMD(new Date());
       document.getElementById('payoutToMarkAmount').value = '';
       document.getElementById('paymentReference').value = '';
       document.getElementById('paymentNotes').value = '';
@@ -5354,7 +5943,7 @@
       document.getElementById('payoutToMarkUserId').value = userId;
       document.getElementById('payoutToMarkAmount').value = Number(amount).toFixed(2);
       const targetPayout = payouts.find(p => String(p.id) === String(payoutId));
-      const defDate = targetPayout?.paidDate || targetPayout?.date || new Date().toISOString().split('T')[0];
+      const defDate = targetPayout?.paidDate || formatDateToYMD(new Date());
       const dateEl = document.getElementById('payoutPaidDate');
       if (dateEl) dateEl.value = defDate;
       const selectGroup = document.getElementById('payoutUserSelectGroup');
@@ -5378,9 +5967,25 @@
         showToast('Please enter a valid amount', 'error');
         return;
       }
+      const user = users.find(u => String(u.id) === String(userId));
+      const breakdown = user ? getAdminUnpaidPayoutBreakdown(user, sales) : { total: 0 };
+      const autoAmount = breakdown.total;
+      const manualAdjustment = Math.round((amount - autoAmount) * 100) / 100;
+      const hasAdj = Math.abs(manualAdjustment) >= 0.005;
+      const todayStr = formatDateToYMD(new Date());
+
       showSyncingIndicator();
       if (payoutId) {
-        getRef('payouts/' + payoutId).update({ amount, isCustom: true, manualAdjusted: true }).then(() => {
+        const patch = {
+          amount,
+          autoAmount,
+          manualAdjustment,
+          isCustom: hasAdj,
+          manualAdjusted: hasAdj
+        };
+        const existingRec = payouts.find(p => String(p.id) === String(payoutId));
+        if (existingRec) Object.assign(existingRec, patch);
+        getRef('payouts/' + payoutId).update(patch).then(() => {
           closeMarkPaidModal();
           autoCalculatePayouts();
           refreshPayoutViews();
@@ -5389,15 +5994,19 @@
         });
       } else if (userId) {
         const pid = Date.now();
-        getRef('payouts/' + pid).set({
+        const newRec = {
           id: pid,
           userId,
           amount,
+          autoAmount,
+          manualAdjustment,
           status: 'pending',
-          date: new Date().toISOString().split('T')[0],
-          isCustom: true,
-          manualAdjusted: true
-        }).then(() => {
+          date: todayStr,
+          isCustom: hasAdj,
+          manualAdjusted: hasAdj
+        };
+        payouts.push(newRec);
+        getRef('payouts/' + pid).set(newRec).then(() => {
           closeMarkPaidModal();
           autoCalculatePayouts();
           refreshPayoutViews();
@@ -5405,6 +6014,19 @@
           showToast('Pending payout created: ' + formatCurrency(amount));
         });
       }
+    }
+
+    function computeTimestampForPaidDate(paidDate) {
+      const todayStr = formatDateToYMD(new Date());
+      if (!paidDate || paidDate === todayStr) {
+        return Date.now();
+      }
+      const endOfDay = parseLocalYMD(paidDate);
+      if (endOfDay) {
+        endOfDay.setHours(23, 59, 59, 999);
+        return endOfDay.getTime();
+      }
+      return Date.now();
     }
 
     function confirmMarkAsPaid(e) {
@@ -5415,25 +6037,41 @@
       const method = document.getElementById('paymentMethod').value;
       const reference = document.getElementById('paymentReference').value || 'N/A';
       const notes = document.getElementById('paymentNotes').value || 'N/A';
-      const paidDate = document.getElementById('payoutPaidDate')?.value || new Date().toISOString().split('T')[0];
+      const paidDate = document.getElementById('payoutPaidDate')?.value || formatDateToYMD(new Date());
 
       const historyId = Date.now();
-      const histTimestamp = new Date(paidDate + 'T12:00:00').getTime() || historyId;
+      const histTimestamp = computeTimestampForPaidDate(paidDate);
+      const histRecord = {
+        id: historyId,
+        userId,
+        amount,
+        method,
+        reference,
+        notes,
+        period: currentPayoutPeriod,
+        paidDate,
+        timestamp: histTimestamp
+      };
 
       showSyncingIndicator();
-      getRef('payoutHistory/' + historyId).set({
-        id: historyId, userId, amount, method, reference, notes,
-        period: currentPayoutPeriod, paidDate, timestamp: histTimestamp
-      }).then(() => {
+      getRef('payoutHistory/' + historyId).set(histRecord).then(() => {
         if (payoutId) {
-          return getRef('payouts/' + payoutId).update({ amount, status: 'paid', paidDate, method, reference, timestamp: histTimestamp });
+          const paidPatch = { amount, status: 'paid', paidDate, method, reference, timestamp: histTimestamp, isCustom: false, manualAdjusted: false, manualAdjustment: 0 };
+          const localP = payouts.find(p => String(p.id) === String(payoutId));
+          if (localP) Object.assign(localP, paidPatch);
+          return getRef('payouts/' + payoutId).update(paidPatch);
         } else {
-          return getRef('payouts/' + historyId).set({ id: historyId, userId, amount, status: 'paid', paidDate, method, reference, date: paidDate, timestamp: histTimestamp });
+          const paidRec = { id: historyId, userId, amount, status: 'paid', paidDate, method, reference, date: paidDate, timestamp: histTimestamp };
+          payouts.push(paidRec);
+          return getRef('payouts/' + historyId).set(paidRec);
         }
       }).then(() => {
+        payoutHistoryList = [histRecord, ...payoutHistoryList.filter(r => String(r.id) !== String(historyId))]
+          .sort((a, b) => (getPayoutCutoffTimestamp(b) || 0) - (getPayoutCutoffTimestamp(a) || 0));
         closeMarkPaidModal();
-        loadPayoutHistory();
-        autoCalculatePayouts();
+        renderPayoutHistoryTable();
+        autoCalculatePayouts({ clearCustomOverrides: true });
+        updateUI();
         showToast('Payout recorded!');
       });
     }
@@ -5451,7 +6089,7 @@
       document.getElementById('editHistoryId').value = rec.id;
       document.getElementById('editHistoryUserId').value = rec.userId || '';
       document.getElementById('editHistoryAdminName').value = `${name} (@${u ? u.username : 'admin'})`;
-      document.getElementById('editHistoryPaidDate').value = rec.paidDate || new Date().toISOString().split('T')[0];
+      document.getElementById('editHistoryPaidDate').value = rec.paidDate || formatDateToYMD(new Date());
       document.getElementById('editHistoryAmount').value = Number(rec.amount || 0).toFixed(2);
       document.getElementById('editHistoryMethod').value = rec.method || 'GCash';
       document.getElementById('editHistoryReference').value = (rec.reference === 'N/A' ? '' : rec.reference) || '';
@@ -5474,7 +6112,11 @@
       const method = document.getElementById('editHistoryMethod').value;
       const reference = document.getElementById('editHistoryReference').value.trim() || 'N/A';
       const notes = document.getElementById('editHistoryNotes').value.trim() || 'N/A';
-      const histTimestamp = new Date(paidDate + 'T12:00:00').getTime() || Date.now();
+
+      const existingRec = (payoutHistoryList || []).find(r => String(r.id) === String(historyId));
+      const histTimestamp = (existingRec && existingRec.paidDate === paidDate && existingRec.timestamp)
+        ? Number(existingRec.timestamp)
+        : computeTimestampForPaidDate(paidDate);
 
       showSyncingIndicator();
       getRef('payoutHistory/' + historyId).update({
@@ -5485,6 +6127,10 @@
         notes,
         timestamp: histTimestamp
       }).then(() => {
+        if (existingRec) {
+          Object.assign(existingRec, { paidDate, amount, method, reference, notes, timestamp: histTimestamp });
+          payoutHistoryList.sort((a, b) => (getPayoutCutoffTimestamp(b) || 0) - (getPayoutCutoffTimestamp(a) || 0));
+        }
         if (historyId) {
           getRef('payouts/' + historyId).once('value', (s) => {
             if (s.exists()) {
@@ -5498,49 +6144,55 @@
           });
         }
         closeEditPayoutHistoryModal();
-        loadPayoutHistory();
+        renderPayoutHistoryTable();
         autoCalculatePayouts();
+        updateUI();
         showToast('Payout record updated!');
       }).catch(err => {
         showToast('Error: ' + err.message, 'error');
       });
     }
 
+    function renderPayoutHistoryTable() {
+      const tbody = document.getElementById('payoutHistoryBody');
+      if (!tbody) return;
+      let arr = [...(payoutHistoryList || [])];
+      if (!isOwner() && currentSession) {
+        arr = arr.filter(r => String(r.userId) === String(currentSession.id));
+      }
+      if (arr.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; color:var(--muted-foreground); padding:20px;">No payout history yet</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = arr.map(r => {
+        const u = users.find(x => String(x.id) === String(r.userId));
+        const name = u ? (u.customName || u.username).replace(/^@/, '') : 'Admin';
+        return `
+          <tr>
+            <td>${r.paidDate || '-'}</td>
+            <td>${name}</td>
+            <td>${r.period || 'all'}</td>
+            <td style="font-weight:600; color:var(--success);">${formatCurrency(r.amount)}</td>
+            <td>${r.method || '-'}</td>
+            <td>${r.reference || '-'}</td>
+            <td>${r.notes || '-'}</td>
+            ${isOwner() ? `
+              <td style="white-space:nowrap;">
+                <button class="btn btn-sm btn-outline" style="margin-right:4px;" onclick="openEditPayoutHistoryModal('${r.id}')">Edit</button>
+                <button class="btn btn-sm btn-danger" onclick="deletePayoutHistory('${r.id}')">✕</button>
+              </td>
+            ` : ''}
+          </tr>
+        `;
+      }).join('');
+    }
+
     function loadPayoutHistory() {
       getRef('payoutHistory').once('value', (snap) => {
         const data = snap.val() || {};
-        payoutHistoryList = Object.values(data).sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-        let arr = [...payoutHistoryList];
-        if (!isOwner()) {
-          arr = arr.filter(r => String(r.userId) === String(currentSession.id));
-        }
-        const tbody = document.getElementById('payoutHistoryBody');
-        if (!tbody) return;
-        if (arr.length === 0) {
-          tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; color:var(--muted-foreground); padding:20px;">No payout history yet</td></tr>`;
-          return;
-        }
-        tbody.innerHTML = arr.map(r => {
-          const u = users.find(x => String(x.id) === String(r.userId));
-          const name = u ? (u.customName || u.username).replace(/^@/, '') : 'Admin';
-          return `
-            <tr>
-              <td>${r.paidDate || '-'}</td>
-              <td>${name}</td>
-              <td>${r.period || 'all'}</td>
-              <td style="font-weight:600; color:var(--success);">${formatCurrency(r.amount)}</td>
-              <td>${r.method || '-'}</td>
-              <td>${r.reference || '-'}</td>
-              <td>${r.notes || '-'}</td>
-              ${isOwner() ? `
-                <td style="white-space:nowrap;">
-                  <button class="btn btn-sm btn-outline" style="margin-right:4px;" onclick="openEditPayoutHistoryModal('${r.id}')">Edit</button>
-                  <button class="btn btn-sm btn-danger" onclick="deletePayoutHistory('${r.id}')">✕</button>
-                </td>
-              ` : ''}
-            </tr>
-          `;
-        }).join('');
+        payoutHistoryList = Object.values(data).sort((a, b) => (getPayoutCutoffTimestamp(b) || 0) - (getPayoutCutoffTimestamp(a) || 0));
+        dataReady.payoutHistory = true;
+        renderPayoutHistoryTable();
       });
     }
 
@@ -5550,17 +6202,21 @@
       getRef('payoutHistory/' + historyId).once('value', (snap) => {
         const histData = snap.val();
         getRef('payoutHistory/' + historyId).remove().then(() => {
+          payoutHistoryList = (payoutHistoryList || []).filter(r => String(r.id) !== String(historyId));
           if (historyId) {
+            payouts = payouts.filter(p => String(p.id) !== String(historyId));
             getRef('payouts/' + historyId).remove();
           }
           if (histData && histData.userId) {
             const match = payouts.find(p => String(p.userId) === String(histData.userId) && p.status === 'paid' && Number(p.amount) === Number(histData.amount));
             if (match) {
+              payouts = payouts.filter(p => String(p.id) !== String(match.id));
               getRef('payouts/' + match.id).remove();
             }
           }
-          loadPayoutHistory();
-          autoCalculatePayouts();
+          renderPayoutHistoryTable();
+          autoCalculatePayouts({ clearCustomOverrides: true });
+          updateUI();
           showToast('Payout record deleted & returned to Pending');
         });
       });
@@ -5631,7 +6287,7 @@
           role,
           commissionMode,
           profitPercent,
-          createdDate: new Date().toISOString().split('T')[0]
+          createdDate: formatDateToYMD(new Date())
         }).then(() => {
           this.reset();
           closeUserModal();
@@ -5647,7 +6303,10 @@
       if (mode === 'flatRate') return `Flat ${val}% of Sale`;
       if (mode === 'profitShare') return `${val}% of Profit`;
       if (mode === 'fixedPerSale') return `${formatCurrency(val)} / Unit`;
-      return 'Bracket-Based (25%–40% of Profit)';
+      const rates = (commissionBrackets || []).map(b => Number(b.rate)).filter(r => !isNaN(r));
+      const minRate = rates.length ? Math.min(...rates) : 25;
+      const maxRate = rates.length ? Math.max(...rates) : 40;
+      return `Bracket-Based (${minRate}%–${maxRate}% of Profit)`;
     }
 
     function renderUserList() {
@@ -5658,11 +6317,10 @@
         return;
       }
       container.innerHTML = users.map(user => {
-        const uKey = sanitizeUserKey(user.username);
-        const userSales = sales.filter(s => (String(s.userId) === String(user.id) || s.userKey === uKey) && s.sold);
+        const userSales = sales.filter(s => doesSaleBelongToUser(s, user) && s.sold);
         const totalSales = userSales.reduce((sum, s) => sum + (Number(s.totalPrice) || 0), 0);
-        const totalProfit = userSales.reduce((sum, s) => sum + (((Number(s.price) || 0) - (Number(s.buyPrice) || 0)) * (parseInt(s.quantity) || 1)), 0);
-        const totalSalary = userSales.reduce((sum, s) => sum + (getEffectiveSaleUnitCommission(s, sales) * (parseInt(s.quantity) || 1)), 0);
+        const totalProfit = userSales.reduce((sum, s) => sum + (((Number(s.price) || 0) - (Number(s.buyPrice) || 0)) * (parseInt(s.quantity) || 1)) + (Number(s.tip) || 0), 0);
+        const totalSalary = userSales.reduce((sum, s) => sum + (getEffectiveSaleUnitCommission(s, sales) * (parseInt(s.quantity) || 1)) + (Number(s.tip) || 0), 0);
         const modeLabel = formatUserCommModeLabel(user);
         const displayName = (user.customName || user.username || 'User').replace(/^@/, '');
         const roleBadge = (user.role || 'admin').toLowerCase() === 'owner' ? 'Owner' : 'Admin';
@@ -5817,7 +6475,7 @@
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'sales_' + new Date().toISOString().split('T')[0] + '.csv';
+      a.download = 'sales_' + formatDateToYMD(new Date()) + '.csv';
       a.click();
       showToast('CSV exported!');
     }
